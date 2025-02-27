@@ -1,7 +1,9 @@
 
-use std::{fs::File, path::{self, Path}};
+pub mod core;
 
+use std::{fs::File, path::{self, Path}};
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
+use crate::core::octree::test;
 
 fn grayscale(source: &DynamicImage, destination: &mut RgbaImage) {
     for pixel in source.pixels() {

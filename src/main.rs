@@ -1,9 +1,10 @@
 
 pub mod core;
 
-use std::{fs::File, path::{self, Path}};
-use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
-use crate::core::octree::test;
+use core::{octree::Octree, octree_flat::FlatOctree};
+use std::{fs::File, path::{self, Path}, time::{Duration, Instant}};
+use image::{DynamicImage, GenericImageView, Pixel, Rgb, Rgba, RgbaImage};
+use fastrand::u8 as randu8;
 
 fn grayscale(source: &DynamicImage, destination: &mut RgbaImage) {
     for pixel in source.pixels() {
@@ -171,7 +172,7 @@ fn bw_quant_sierra_lite_dither(source: &DynamicImage, destination: &mut RgbaImag
     }
 }
 
-fn main() {
+fn img_main() {
     let source_path = Path::new("images/sakuya_gardening.png");
     let processed_path = Path::new("images/sakuya_line_filter.png");
 
@@ -188,4 +189,29 @@ fn main() {
         Ok(()) => println!("Suwako image processed."),
         Err(err) => println!("{}", err),
     }
+}
+
+
+fn main() {
+    let source_path = Path::new("images/sakuya_gardening.png");
+    let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
+    let img = image::open(absolute_source_path).unwrap();
+
+    // let mut flat_octree = FlatOctree::new();
+    let mut recursive_octree = Octree::new();
+
+    let mut colors: Vec<Rgb<u8>> = vec![];
+    let mut pixel_count = 0;
+
+    for (_, _, rgba) in img.pixels() {
+        colors.push(rgba.to_rgb());
+        pixel_count += 1;
+    }
+
+    let start = Instant::now();
+    for color in colors {
+        recursive_octree.add_color(color);
+    }
+
+    println!("seconds: {:?}, colors pushed: {}", Instant::now() - start, pixel_count);
 }

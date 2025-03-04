@@ -1,31 +1,34 @@
 
+use core::fmt;
+
 use image::Rgb;
-// note: handling alpha values will be delegated to when
-//      octree is quantizing the image, i'll copy and paste from original image to quantized image.
 
-fn get_color_index(color: Rgb<u8>, level: usize) -> usize {
-    let mut index: usize = 0;
-    let mask = 0b10000000 >> level;
-    if color.0[0] & mask != 0 { index |= 0b100 }
-    if color.0[1] & mask != 0 { index |= 0b010 }
-    if color.0[2] & mask != 0 { index |= 0b001 }
+use super::octree_flat::{add_colors_mut, get_color_index};
 
-    return index;
-}
-fn add_colors_mut(first_color: &mut Rgb<u32>, second_color: Rgb<u8>) {
-    for (a, b) in first_color.0.iter_mut().zip(second_color.0.iter()) {
-        *a += u32::from(*b)
-    } 
-}
-
+const MAX_DEPTH: u8 = 8;
 pub struct OctreeNode {
     color: Rgb<u32>,
     pixel_count: u32,
-    children: [Option<usize>; 8],
+    pub children: [Option<Box<OctreeNode>>; 8],
 }
 pub struct Octree {
-    root: usize,
-    nodes: Vec<OctreeNode>,
+    pub root: OctreeNode,
+}
+
+impl Octree {
+    pub fn new() -> Self {
+        Self { root: OctreeNode::new() }
+    }
+    pub fn add_color(&mut self, color: Rgb<u8>) {
+        self.root.add_color(color, 0);
+    }
+}
+impl fmt::Display for Octree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // i will implement this in bevy soon.
+        let node = &self.root;
+        write!(f, "{}", node.to_string())
+    }
 }
 
 impl OctreeNode {
@@ -33,47 +36,30 @@ impl OctreeNode {
         Self {
             color: Rgb([0, 0, 0]),
             pixel_count: 0,
-            children: [None; 8],
+            children: std::array::from_fn(|_| None),
         }
+    }
+    pub fn add_color(&mut self, color: Rgb<u8>, level: usize) {
+        if level >= usize::from(MAX_DEPTH) {
+            add_colors_mut(&mut self.color, color);
+            self.pixel_count += 1;
+            return;
+        }
+        let index = get_color_index(color, level);
+        let child = &mut self.children[index];
+        if child.is_none() {
+            self.children[index] = Some(Box::new(OctreeNode::new()));
+        }
+        self.children[index].as_mut().unwrap().add_color(color, level + 1);
     }
 }
 
-impl Octree {
-    pub fn new() -> Self {
-        let node = OctreeNode::new();
-        Self { 
-            root: 0,
-            nodes: vec![node], 
-        }
+impl fmt::Display for OctreeNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let [r, g, b] = self.color.0.map(|x| x as u8);
+        let children: Vec<String> = self.children.iter()
+            .filter_map(|c| c.as_ref().map(|x| format!("{}", x)))
+            .collect();
+        write!(f, "<color: #{:02X}{:02X}{:02X}, pixel_count: {}, children: [{}]>", r, g, b, self.pixel_count, children.join(", "))
     }
-
-    fn add_color(&mut self, color: Rgb<u8>) {
-        let mut current_node_index: usize = 0;
-        for level_index in 0..8 {
-            let nodes_len = self.nodes.len();
-            let nodes = &mut self.nodes;
-            let node = nodes.get_mut(current_node_index);
-            let child_index = get_color_index(color, level_index);
-            if let Some(node) = node {
-                if level_index >= 8 {
-                    add_colors_mut(&mut node.color, color);
-                    node.pixel_count += 1;
-                }
-                let node_index = node.children.get(child_index).and_then(|x| *x);
-                if let Some(node_index) = node_index {
-                    current_node_index = node_index;
-                } else {
-                    let mut new_node = OctreeNode::new();
-                    new_node.children[child_index] = Some(nodes_len);
-                    nodes.push(new_node);
-                }
-
-            }
-        }
-
-    }
-}
-
-pub fn test() {
-
 }

@@ -4,7 +4,6 @@ pub mod core;
 use core::{octree::Octree, octree_flat::FlatOctree};
 use std::{fs::File, path::{self, Path}, time::{Duration, Instant}};
 use image::{DynamicImage, GenericImageView, Pixel, Rgb, Rgba, RgbaImage};
-use fastrand::u8 as randu8;
 
 fn grayscale(source: &DynamicImage, destination: &mut RgbaImage) {
     for pixel in source.pixels() {
@@ -206,6 +205,9 @@ fn main() {
     for (_, _, rgba) in img.pixels() {
         colors.push(rgba.to_rgb());
         pixel_count += 1;
+        if pixel_count > 100 {
+            break;
+        }
     }
 
     let start = Instant::now();
@@ -213,5 +215,8 @@ fn main() {
         recursive_octree.add_color(color);
     }
 
-    println!("seconds: {:?}, colors pushed: {}", Instant::now() - start, pixel_count);
+    println!("\nseconds: {:?}, colors pushed: {}", Instant::now() - start, pixel_count);
+    for ele in recursive_octree.get_leaf_nodes() {
+        print!("{},", ele);
+    }
 }

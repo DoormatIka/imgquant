@@ -1,6 +1,6 @@
 
 use core::{borrow, fmt};
-use std::{cell::{RefCell, RefMut}, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 use image::Rgb;
 
@@ -8,49 +8,49 @@ use super::octree_flat::{add_colors_mut, get_color_index};
 
 const MAX_DEPTH: u8 = 8;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OctreeNode {
-    children: [Option<Rc<RefCell<OctreeNode>>>; 8],
+    children: [Option<Rc<RefCell<OctreeNode>>>; MAX_DEPTH as usize],
     color: Rgb<u32>,
     pixel_count: u32,
-    palette_index: u32, // shrink this later.
+    palette_index: u32,
 }
 
+// turn all of these into weak pointers.
+type LevelVec = [Vec<Rc<RefCell<OctreeNode>>>; MAX_DEPTH as usize];
 pub struct Octree {
     pub root: OctreeNode,
-    levels: Vec<Vec<Rc<RefCell<OctreeNode>>>>,
+    pub levels: LevelVec,
 }
 
 impl Octree {
     pub fn new() -> Self {
         Self { 
             root: OctreeNode::new(),
-            levels: Vec::new(),
+            levels: std::array::from_fn(|_| Vec::new()),
         }
     }
-    pub fn make_palette(&self, color_count: usize) {
+    pub fn make_palette(&mut self, color_count: usize) {
         let palette = Vec::<Rgb<u8>>::new();
         let palette_index = 0;
-        let leaf_count = self.get_leaf_nodes().len();
+        let mut leaf_count = self.get_leaf_nodes().len();
 
-        // loop through every single parent node (not leaf nodes),
-        // get their references and push it into the queue,
-        // dequeue the references
-        //
-        // questions:
-        // - how do you handle repeated nodes?
+        for level in self.levels.iter_mut() {
+            for node in level {
+                let mut node = node.borrow_mut();
+                leaf_count -= node.remove_leaves() as usize;
+                todo!();
+            }
+        }
+        // todo: levels.
     }
     pub fn add_color(&mut self, color: Rgb<u8>) {
-        self.root.add_color(color, 0);
+        self.root.add_color(color, 0, &mut self.levels);
     }
     pub fn get_leaf_nodes(&self) -> Vec<OctreeNode> {
         let leaves = self.root.get_leaf_nodes();
         let nodes: Vec<OctreeNode> = leaves.iter().map(|c| c.borrow().clone()).collect();
         return nodes;
-    }
-    pub fn add_level_node(&mut self, level: usize, node: OctreeNode) {
-        let node = Rc::new(RefCell::new(node));
-        self.levels[level].push(node);
     }
 }
 
@@ -70,11 +70,8 @@ impl OctreeNode {
             palette_index: 0,
             children: std::array::from_fn(|_| None),
         }
-        // i need to keep around an octree reference in the octree nodes
-        //      to push the Rc octree nodes into the levels vector
-        // i guess an Rc can handle it, but are there other tools suited for this?
     }
-    pub fn add_color(&mut self, color: Rgb<u8>, level: usize) {
+    pub fn add_color(&mut self, color: Rgb<u8>, level: usize, levels: &mut LevelVec) {
         if level >= usize::from(MAX_DEPTH) {
             add_colors_mut(&mut self.color, color);
             self.pixel_count += 1;
@@ -83,10 +80,12 @@ impl OctreeNode {
         let index = get_color_index(color, level);
         let child = &mut self.children[index];
         if child.is_none() {
-            self.children[index] = Some(Rc::new(RefCell::new(OctreeNode::new())));
+            let node = Rc::new(RefCell::new(OctreeNode::new()));
+            levels[level].push(Rc::clone(&node));
+            self.children[index] = Some(node);
         }
-        let mut a = self.children[index].as_ref().unwrap().borrow_mut();
-        a.add_color(color, level + 1); // may panic?
+        let mut node = self.children[index].as_ref().unwrap().borrow_mut();
+        node.add_color(color, level + 1, levels);
     }
     pub fn get_palette_index(&self, color: Rgb<u8>, level: usize) -> usize {
         if self.is_leaf() {
@@ -114,7 +113,7 @@ impl OctreeNode {
         let mut leaf_nodes = Vec::<Rc<RefCell<OctreeNode>>>::new();
         for node in self.children.iter() {
             if let Some(node) = node {
-                let borrowed_node = node.borrow_mut();
+                let borrowed_node = node.borrow();
                 if borrowed_node.is_leaf() {
                     leaf_nodes.push(Rc::clone(node)); // reference counted.
                 } else {
@@ -141,6 +140,8 @@ impl OctreeNode {
             *ele = None; 
             // hopefully Rc doesn't have a reference in other code so
             //      Rust can deref this safely.
+            //
+            //  TODO: turn the levels array into weak pointers!
         }
 
         result

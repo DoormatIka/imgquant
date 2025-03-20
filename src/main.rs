@@ -219,4 +219,10 @@ fn main() {
     for ele in recursive_octree.get_leaf_nodes() {
         print!("{},", ele);
     }
+    println!();
+    let mut level_index = 0;
+    for ele in recursive_octree.levels {
+        println!("number of elements: {}, level: {}", ele.len(), level_index);
+        level_index += 1;
+    }
 }

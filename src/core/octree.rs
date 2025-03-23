@@ -1,6 +1,6 @@
 
-use core::{borrow, fmt};
-use std::{cell::RefCell, rc::Rc};
+use core::fmt;
+use std::{cell::RefCell, rc::{Rc, Weak}};
 
 use image::Rgb;
 
@@ -16,8 +16,7 @@ pub struct OctreeNode {
     palette_index: u32,
 }
 
-// turn all of these into weak pointers.
-type LevelVec = [Vec<Rc<RefCell<OctreeNode>>>; MAX_DEPTH as usize];
+type LevelVec = [Vec<Weak<RefCell<OctreeNode>>>; MAX_DEPTH as usize];
 pub struct Octree {
     pub root: OctreeNode,
     pub levels: LevelVec,
@@ -25,27 +24,60 @@ pub struct Octree {
 
 impl Octree {
     pub fn new() -> Self {
-        Self { 
+        Self {
             root: OctreeNode::new(),
             levels: std::array::from_fn(|_| Vec::new()),
         }
     }
-    pub fn make_palette(&mut self, color_count: usize) {
-        let palette = Vec::<Rgb<u8>>::new();
-        let palette_index = 0;
-        let mut leaf_count = self.get_leaf_nodes().len();
+    pub fn make_palette(&mut self, color_count: usize) -> Vec<Rgb<u8>> {
+        let mut palette = Vec::<Rgb<u8>>::new();
+        let mut palette_index = 0;
+        let mut leaves = self.get_leaf_nodes();
+        let mut leaf_count = leaves.len();
 
-        for level in self.levels.iter_mut() {
+        for level in self.levels.iter_mut().rev() {
             for node in level {
-                let mut node = node.borrow_mut();
-                leaf_count -= node.remove_leaves() as usize;
-                todo!();
+                if let Some(node) = node.upgrade() {
+                    let mut node = node.borrow_mut();
+                    leaf_count -= node.remove_leaves() as usize;
+                }
+                if leaf_count <= color_count {
+                    break;
+                }
+            }
+            if leaf_count <= color_count {
+                break;
             }
         }
-        // todo: levels.
+
+        for node in leaves.iter_mut() {
+            if palette_index >= color_count {
+                break;
+            }
+            if node.is_leaf() { // is this check really needed
+                let [r, g, b] = node.color.0;
+                dbg!(node.color);
+                let rgb = Rgb::<u8>([
+                    (r / node.pixel_count) as u8,
+                    (g / node.pixel_count) as u8,
+                    (b / node.pixel_count) as u8,
+                ]);
+                palette.push(rgb);
+            }
+            node.palette_index = palette_index as u32;
+            palette_index += 1;
+        }
+        for ele in self.levels.iter_mut() {
+            ele.clear();
+        }
+
+        palette
     }
     pub fn add_color(&mut self, color: Rgb<u8>) {
         self.root.add_color(color, 0, &mut self.levels);
+    }
+    pub fn get_palette_index(&self, color: Rgb<u8>) -> usize {
+        self.root.get_palette_index(color, 0)
     }
     pub fn get_leaf_nodes(&self) -> Vec<OctreeNode> {
         let leaves = self.root.get_leaf_nodes();
@@ -81,7 +113,7 @@ impl OctreeNode {
         let child = &mut self.children[index];
         if child.is_none() {
             let node = Rc::new(RefCell::new(OctreeNode::new()));
-            levels[level].push(Rc::clone(&node));
+            levels[level].push(Rc::downgrade(&node));
             self.children[index] = Some(node);
         }
         let mut node = self.children[index].as_ref().unwrap().borrow_mut();

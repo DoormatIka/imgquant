@@ -3,7 +3,7 @@ pub mod core;
 
 use core::{octree::Octree, octree_flat::FlatOctree};
 use std::{fs::File, path::{self, Path}, time::{Duration, Instant}};
-use image::{DynamicImage, GenericImageView, Pixel, Rgb, Rgba, RgbaImage};
+use image::{DynamicImage, GenericImage, GenericImageView, Pixel, Rgb, Rgba, RgbaImage};
 
 fn grayscale(source: &DynamicImage, destination: &mut RgbaImage) {
     for pixel in source.pixels() {
@@ -200,14 +200,8 @@ fn main() {
     let mut recursive_octree = Octree::new();
 
     let mut colors: Vec<Rgb<u8>> = vec![];
-    let mut pixel_count = 0;
-
     for (_, _, rgba) in img.pixels() {
         colors.push(rgba.to_rgb());
-        pixel_count += 1;
-        if pixel_count > 100 {
-            break;
-        }
     }
 
     let start = Instant::now();
@@ -215,14 +209,29 @@ fn main() {
         recursive_octree.add_color(color);
     }
 
-    println!("\nseconds: {:?}, colors pushed: {}", Instant::now() - start, pixel_count);
-    for ele in recursive_octree.get_leaf_nodes() {
-        print!("{},", ele);
+    println!("\nseconds: {:?}", Instant::now() - start);
+    println!("Tree leaves length: {}", recursive_octree.get_leaf_nodes().len());
+
+    let palette = recursive_octree.make_palette(16);
+    println!("Tree leaves after quant length: {}", recursive_octree.get_leaf_nodes().len());
+
+    println!("Palette: {:?}", palette);
+
+    /*
+
+    let mut new_img = image::RgbImage::new(img.width(), img.height());
+    for x in 0..new_img.width() {
+        for y in 0..new_img.height() {
+            let pixel = img.get_pixel(x, y).to_rgb();
+            let palette_index = recursive_octree.get_palette_index(pixel);
+            new_img.put_pixel(x, y, palette[palette_index]);
+        }
     }
-    println!();
-    let mut level_index = 0;
-    for ele in recursive_octree.levels {
-        println!("number of elements: {}, level: {}", ele.len(), level_index);
-        level_index += 1;
-    }
+
+    let source_path = Path::new("images/sakuya_gardening_quantized.png");
+    let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
+    new_img.save(absolute_source_path);
+    */
 }
+
+

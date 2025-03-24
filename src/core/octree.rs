@@ -1,5 +1,5 @@
 
-use core::fmt;
+use core::{borrow, fmt};
 use std::{cell::RefCell, rc::{Rc, Weak}};
 
 use image::Rgb;
@@ -32,7 +32,7 @@ impl Octree {
     pub fn make_palette(&mut self, color_count: usize) -> Vec<Rgb<u8>> {
         let mut palette = Vec::<Rgb<u8>>::new();
         let mut palette_index = 0;
-        let mut leaves = self.get_leaf_nodes();
+        let leaves = self.get_leaf_nodes();
         let mut leaf_count = leaves.len();
 
         for level in self.levels.iter_mut().rev() {
@@ -50,13 +50,16 @@ impl Octree {
             }
         }
 
-        for node in leaves.iter_mut() {
+        for ele in self.levels.iter_mut() {
+            ele.clear();
+        }
+
+        for node in self.get_leaf_nodes().iter_mut() {
             if palette_index >= color_count {
                 break;
             }
             if node.is_leaf() { // is this check really needed
                 let [r, g, b] = node.color.0;
-                dbg!(node.color);
                 let rgb = Rgb::<u8>([
                     (r / node.pixel_count) as u8,
                     (g / node.pixel_count) as u8,
@@ -66,9 +69,6 @@ impl Octree {
             }
             node.palette_index = palette_index as u32;
             palette_index += 1;
-        }
-        for ele in self.levels.iter_mut() {
-            ele.clear();
         }
 
         palette
@@ -143,13 +143,13 @@ impl OctreeNode {
     }
     pub fn get_leaf_nodes(&self) -> Vec<Rc<RefCell<OctreeNode>>> {
         let mut leaf_nodes = Vec::<Rc<RefCell<OctreeNode>>>::new();
-        for node in self.children.iter() {
-            if let Some(node) = node {
-                let borrowed_node = node.borrow();
-                if borrowed_node.is_leaf() {
-                    leaf_nodes.push(Rc::clone(node)); // reference counted.
+        for child in self.children.iter() {
+            if let Some(child) = child {
+                let borrowed_child = child.borrow();
+                if borrowed_child.is_leaf() {
+                    leaf_nodes.push(Rc::clone(child)); // reference counted.
                 } else {
-                    for element in borrowed_node.get_leaf_nodes() {
+                    for element in borrowed_child.get_leaf_nodes() {
                         leaf_nodes.push(element);
                     };
                 }
@@ -160,20 +160,16 @@ impl OctreeNode {
     }
     pub fn remove_leaves(&mut self) -> i32 {
         let mut result = 0;
-        for ele in self.children.iter_mut() {
-            if let Some(ele) = ele {
-                let borrowed_node = ele.borrow_mut();
-                for (a, b) in self.color.0.iter_mut().zip(borrowed_node.color.0.iter()) {
-                    *a += u32::from(*b)
+        for child in self.children.iter_mut() {
+            if let Some(child) = child {
+                let borrowed_child = child.borrow_mut();
+                for (own_color, child_color) in self.color.0.iter_mut().zip(borrowed_child.color.0.iter()) {
+                    *own_color += u32::from(*child_color)
                 } 
-                self.pixel_count += borrowed_node.pixel_count;
+                self.pixel_count += borrowed_child.pixel_count;
                 result += 1;
             }
-            *ele = None; 
-            // hopefully Rc doesn't have a reference in other code so
-            //      Rust can deref this safely.
-            //
-            //  TODO: turn the levels array into weak pointers!
+            *child = None; 
         }
 
         result

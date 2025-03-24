@@ -212,12 +212,10 @@ fn main() {
     println!("\nseconds: {:?}", Instant::now() - start);
     println!("Tree leaves length: {}", recursive_octree.get_leaf_nodes().len());
 
-    let palette = recursive_octree.make_palette(16);
+    let palette = recursive_octree.make_palette(256);
     println!("Tree leaves after quant length: {}", recursive_octree.get_leaf_nodes().len());
 
     println!("Palette: {:?}", palette);
-
-    /*
 
     let mut new_img = image::RgbImage::new(img.width(), img.height());
     for x in 0..new_img.width() {
@@ -231,7 +229,6 @@ fn main() {
     let source_path = Path::new("images/sakuya_gardening_quantized.png");
     let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
     new_img.save(absolute_source_path);
-    */
 }
 
 

@@ -192,7 +192,7 @@ fn img_main() {
 
 
 fn main() {
-    let source_path = Path::new("images/sakuya_gardening.png");
+    let source_path = Path::new("images/Portal_Companion_Cube.png");
     let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
     let img = image::open(absolute_source_path).unwrap();
 
@@ -215,18 +215,19 @@ fn main() {
     let palette = recursive_octree.make_palette(256);
     println!("Tree leaves after quant length: {}", recursive_octree.get_leaf_nodes().len());
 
-    println!("Palette: {:?}", palette);
-
     let mut new_img = image::RgbImage::new(img.width(), img.height());
     for x in 0..new_img.width() {
         for y in 0..new_img.height() {
             let pixel = img.get_pixel(x, y).to_rgb();
             let palette_index = recursive_octree.get_palette_index(pixel);
-            new_img.put_pixel(x, y, palette[palette_index]);
+            match palette_index {
+                Some(palette_index) => new_img.put_pixel(x, y, palette[palette_index]),
+                None => println!("Couldn't find palette index for {} {}", x, y),
+            }
         }
     }
 
-    let source_path = Path::new("images/sakuya_gardening_quantized.png");
+    let source_path = Path::new("images/Portal_Companion_Cube_Quantized.png");
     let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
     new_img.save(absolute_source_path);
 }

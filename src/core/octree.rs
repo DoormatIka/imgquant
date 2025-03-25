@@ -30,17 +30,22 @@ impl Octree {
         }
     }
     pub fn make_palette(&mut self, color_count: usize) -> Vec<Rgb<u8>> {
+        let mut level_i = MAX_DEPTH;
+
         let mut palette = Vec::<Rgb<u8>>::new();
         let mut palette_index = 0;
         let leaves = self.get_leaf_nodes();
         let mut leaf_count = leaves.len();
 
-        for level in self.levels.iter_mut().rev() {
+        for level in self.levels.iter_mut().rev().skip(1) {
+            println!("Working on level {}", level_i);
             for node in level {
                 if let Some(node) = node.upgrade() {
                     let mut node = node.borrow_mut();
                     leaf_count -= node.remove_leaves() as usize;
                 }
+                // ISSUE: leaf_count is not representative of the true leaf count of the octree.
+                // something is going wrong with node.remove_leaves()
                 if leaf_count <= color_count {
                     break;
                 }
@@ -48,26 +53,32 @@ impl Octree {
             if leaf_count <= color_count {
                 break;
             }
+            level_i -= 1;
         }
 
         for ele in self.levels.iter_mut() {
             ele.clear();
         }
 
-        for node in self.get_leaf_nodes().iter_mut() {
+        let mut leaves = self.get_leaf_nodes();
+        let true_leaf_count = leaves.len();
+        println!("After compression, true leaf count: {}, questioned leaf_count: {}", true_leaf_count, leaf_count);
+
+        for node in leaves.iter_mut() {
             if palette_index >= color_count {
                 break;
             }
-            if node.is_leaf() { // is this check really needed
-                let [r, g, b] = node.color.0;
+            let mut borrowed_node = node.borrow_mut();
+            if borrowed_node.is_leaf() {
+                let [r, g, b] = borrowed_node.color.0;
                 let rgb = Rgb::<u8>([
-                    (r / node.pixel_count) as u8,
-                    (g / node.pixel_count) as u8,
-                    (b / node.pixel_count) as u8,
+                    (r / borrowed_node.pixel_count) as u8,
+                    (g / borrowed_node.pixel_count) as u8,
+                    (b / borrowed_node.pixel_count) as u8,
                 ]);
                 palette.push(rgb);
             }
-            node.palette_index = palette_index as u32;
+            borrowed_node.palette_index = palette_index as u32;
             palette_index += 1;
         }
 
@@ -76,13 +87,12 @@ impl Octree {
     pub fn add_color(&mut self, color: Rgb<u8>) {
         self.root.add_color(color, 0, &mut self.levels);
     }
-    pub fn get_palette_index(&self, color: Rgb<u8>) -> usize {
+    pub fn get_palette_index(&self, color: Rgb<u8>) -> Option<usize> {
         self.root.get_palette_index(color, 0)
     }
-    pub fn get_leaf_nodes(&self) -> Vec<OctreeNode> {
+    pub fn get_leaf_nodes(&self) -> Vec<Rc<RefCell<OctreeNode>>> {
         let leaves = self.root.get_leaf_nodes();
-        let nodes: Vec<OctreeNode> = leaves.iter().map(|c| c.borrow().clone()).collect();
-        return nodes;
+        return leaves;
     }
 }
 
@@ -119,9 +129,9 @@ impl OctreeNode {
         let mut node = self.children[index].as_ref().unwrap().borrow_mut();
         node.add_color(color, level + 1, levels);
     }
-    pub fn get_palette_index(&self, color: Rgb<u8>, level: usize) -> usize {
+    pub fn get_palette_index(&self, color: Rgb<u8>, level: usize) -> Option<usize> {
         if self.is_leaf() {
-            return self.palette_index as usize;
+            return Some(self.palette_index as usize);
         } else {
             let index = get_color_index(color, level);
             match &self.children[index] {
@@ -136,7 +146,8 @@ impl OctreeNode {
                             return c.get_palette_index(color, level + 1);
                         }
                     }
-                    return 0;
+
+                    None
                 },
             }
         }
@@ -159,7 +170,7 @@ impl OctreeNode {
         leaf_nodes
     }
     pub fn remove_leaves(&mut self) -> i32 {
-        let mut result = 0;
+        let mut leaves_removed = 0;
         for child in self.children.iter_mut() {
             if let Some(child) = child {
                 let borrowed_child = child.borrow_mut();
@@ -167,12 +178,12 @@ impl OctreeNode {
                     *own_color += u32::from(*child_color)
                 } 
                 self.pixel_count += borrowed_child.pixel_count;
-                result += 1;
+                leaves_removed += 1;
             }
             *child = None; 
         }
 
-        result
+        leaves_removed
     }
 
     pub fn is_leaf(&self) -> bool {

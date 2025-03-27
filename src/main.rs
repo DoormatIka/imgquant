@@ -1,9 +1,9 @@
 
 pub mod core;
 
-use core::{octree::Octree, octree_flat::FlatOctree};
+use core::octree::Octree;
 use std::{fs::File, path::{self, Path}, time::{Duration, Instant}};
-use image::{DynamicImage, GenericImage, GenericImageView, Pixel, Rgb, Rgba, RgbaImage};
+use image::{DynamicImage, GenericImage, GenericImageView, Pixel, Rgb, RgbImage, Rgba, RgbaImage};
 
 fn grayscale(source: &DynamicImage, destination: &mut RgbaImage) {
     for pixel in source.pixels() {
@@ -64,7 +64,7 @@ fn bw_quant_basic_dithering(source: &DynamicImage, destination: &mut RgbaImage) 
     }
 }
 
-fn bw_quant_line_filter(source: &DynamicImage, destination: &mut RgbaImage) {
+fn bw_quant_line_filter(source: &DynamicImage, destination: &mut RgbImage) {
     let mut color_error: i16 = 0;
     let image_width = source.width();
     
@@ -76,19 +76,19 @@ fn bw_quant_line_filter(source: &DynamicImage, destination: &mut RgbaImage) {
         .round()
         .clamp(0.0, 255.0) as i16;
 
-        let corrected_grayscale = (grayscale - color_error).clamp(0, 255);
+        let corrected_grayscale = grayscale - color_error;
 
-        let bw_color: u8 = if corrected_grayscale <= 127 - grayscale {
+        let bw_color: u8 = if grayscale <= 127 + color_error {
             0
         } else {
             255
         };
-        color_error = corrected_grayscale + i16::from(bw_color);
+        color_error = (corrected_grayscale - i16::from(bw_color)).clamp(0, 255);
 
-        destination.put_pixel(x, y, Rgba([bw_color, bw_color, bw_color, rgba[3]]));
+        destination.put_pixel(x, y, Rgb([bw_color, bw_color, bw_color]));
 
         if x > image_width {
-            // color_error = 0;
+            color_error = 0;
         }
     }
 }
@@ -171,32 +171,67 @@ fn bw_quant_sierra_lite_dither(source: &DynamicImage, destination: &mut RgbaImag
     }
 }
 
-fn img_main() {
-    let source_path = Path::new("images/sakuya_gardening.png");
-    let processed_path = Path::new("images/sakuya_line_filter.png");
+fn sierra_lite(source: &DynamicImage, destination: &mut RgbaImage) {
+    let image_width = source.width() as usize;
 
-    let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
-    let absolute_processed_path = path::absolute(processed_path).unwrap().into_os_string().into_string().unwrap();
+    let mut current_errors = vec![0i16; image_width + 1];
+    let mut forward_errors = vec![0i16; image_width + 1];
 
-    let img = image::open(absolute_source_path).unwrap();
-    let mut output = RgbaImage::new(img.width(), img.height());
+    for pixel in source.pixels() {
+        let x = pixel.0 as usize;
+        let y = pixel.1 as usize;
+        let rgba: [u8; 4] = pixel.2.0;
+        // NOTES:
+        //
+        // quant color using the octree
+        let grayscale = (f32::from(rgba[0]) * 0.2126 
+            + f32::from(rgba[1]) * 0.7152 
+            + f32::from(rgba[2]) * 0.0722)
+        .round()
+        .clamp(0.0, 255.0) as i16;
+        // corrected grayscale will probably be adding the rgb values then averaging them, then
+        // pushing them back into the octree to get another value.
+        let corrected_grayscale = (grayscale + current_errors[x as usize]).clamp(0, 255);
+        let bw_color: u8 = if corrected_grayscale <= 127 { 0 } else { 255 };
 
-    bw_quant_line_filter(&img, &mut output);
+        let color_error = corrected_grayscale - i16::from(bw_color);
 
-    let _ = File::create(absolute_processed_path.clone()).unwrap();
-    match output.save(absolute_processed_path) {
-        Ok(()) => println!("Suwako image processed."),
-        Err(err) => println!("{}", err),
+        // https://tannerhelland.com/2012/12/28/dithering-eleven-algorithms-source-code.html
+        // https://www.youtube.com/watch?v=ico4fJfohMQ
+        let forward_x = (x + 1).clamp(0, image_width) as usize;
+        let behind_x = if x <= 0 { 0 } else { (x - 1).clamp(0, image_width) as usize };
+        current_errors[forward_x] += color_error * 2 / 4;
+        forward_errors[behind_x] += color_error / 4;
+        forward_errors[x] += color_error / 4;
+        
+        destination.put_pixel(x as u32, y as u32, Rgba([bw_color, bw_color, bw_color, rgba[3]]));
+
+        if x >= image_width - 1 {
+            current_errors.clone_from_slice(&forward_errors);
+            forward_errors.fill(0);
+        }
     }
 }
 
-
 fn main() {
-    let source_path = Path::new("images/Portal_Companion_Cube.png");
+    let source_path = Path::new("images/sakuya_gardening.png");
+    let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
+    let img = image::open(absolute_source_path).unwrap();
+    let mut new_img = image::RgbImage::new(img.width(), img.height());
+
+    bw_quant_line_filter(&img, &mut new_img);
+
+    let source_path = Path::new("images/sakuya_line_filter.png");
+    let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
+    new_img.save(absolute_source_path);
+}
+
+/*
+fn main() {
+    let source_path = Path::new("images/suwako.png");
     let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
     let img = image::open(absolute_source_path).unwrap();
 
-    // let mut flat_octree = FlatOctree::new();
     let mut recursive_octree = Octree::new();
 
     let mut colors: Vec<Rgb<u8>> = vec![];
@@ -209,13 +244,16 @@ fn main() {
         recursive_octree.add_color(color);
     }
 
-    println!("\nseconds: {:?}", Instant::now() - start);
+    println!("\nseconds to initialize: {:?}", Instant::now() - start);
     println!("Tree leaves length: {}", recursive_octree.get_leaf_nodes().len());
 
-    let palette = recursive_octree.make_palette(256);
+    let palette = recursive_octree.make_palette(16);
     println!("Tree leaves after quant length: {}", recursive_octree.get_leaf_nodes().len());
 
     let mut new_img = image::RgbImage::new(img.width(), img.height());
+
+    let start = Instant::now();
+
     for x in 0..new_img.width() {
         for y in 0..new_img.height() {
             let pixel = img.get_pixel(x, y).to_rgb();
@@ -227,9 +265,13 @@ fn main() {
         }
     }
 
-    let source_path = Path::new("images/Portal_Companion_Cube_Quantized.png");
+    let duration = start.elapsed();
+    println!("Quantization took: {:?}", duration);
+    println!("Time per pixel: {:.6} ms", duration.as_secs_f64() / (new_img.width() * new_img.height()) as f64 * 1000.0);
+
+    let source_path = Path::new("images/suwako_quant.png");
     let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
     new_img.save(absolute_source_path);
 }
-
+*/
 

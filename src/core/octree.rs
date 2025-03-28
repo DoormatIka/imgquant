@@ -1,6 +1,6 @@
 
 use core::fmt;
-use std::{cell::RefCell, rc::{Rc, Weak}};
+use std::{cell::RefCell, ops::{AddAssign, Sub, Mul, Div}, rc::{Rc, Weak}};
 
 use image::Rgb;
 
@@ -13,8 +13,53 @@ pub fn get_color_index(color: Rgb<u8>, level: usize) -> usize {
 
     return index;
 }
+pub fn add_colors<T, U>(color: &mut Rgb<T>, other_color: &Rgb<U>) 
+where
+    T: AddAssign + From<U>,
+    U: Copy,
+{
+    color.0.iter_mut()
+        .zip(other_color.0.iter().copied())
+        .for_each(|(a, b)| *a += T::from(b));
+}
 
-const MAX_DEPTH: u8 = 5;
+pub fn sub_colors<T, U>(color: &Rgb<T>, other_color: &Rgb<U>) -> Rgb<T> 
+where
+    T: Sub<U, Output = T> + Copy,
+    U: Copy,
+{
+    Rgb([
+        color.0[0] - other_color.0[0],
+        color.0[1] - other_color.0[1],
+        color.0[2] - other_color.0[2],
+    ])
+}
+
+pub fn mul_colors<T, U>(color: &Rgb<T>, other_color: &Rgb<U>) -> Rgb<T> 
+where
+    T: Mul<U, Output = T> + Copy,
+    U: Copy,
+{
+    Rgb([
+        color.0[0] * other_color.0[0],
+        color.0[1] * other_color.0[1],
+        color.0[2] * other_color.0[2],
+    ])
+}
+
+pub fn div_colors<T, U>(color: &Rgb<T>, other_color: &Rgb<U>) -> Rgb<T> 
+where
+    T: Div<U, Output = T> + Copy,
+    U: Copy,
+{
+    Rgb([
+        color.0[0] / other_color.0[0],
+        color.0[1] / other_color.0[1],
+        color.0[2] / other_color.0[2],
+    ])
+}
+
+const MAX_DEPTH: u8 = 6;
 
 #[derive(Clone, Debug)]
 pub struct OctreeNode {
@@ -34,7 +79,11 @@ impl Octree {
     pub fn new() -> Self {
         Self {
             root: OctreeNode::new(),
-            levels: std::array::from_fn(|_| Vec::new()),
+            levels: std::array::from_fn(|_| {
+                let mut a = Vec::new();
+                a.reserve(10_000);
+                a
+            }),
         }
     }
     pub fn make_palette(&mut self, color_count: i32) -> Vec<Rgb<u8>> {
@@ -121,9 +170,7 @@ impl OctreeNode {
     }
     pub fn add_color(&mut self, color: Rgb<u8>, level: usize, levels: &mut LevelVec) {
         if level >= usize::from(MAX_DEPTH) {
-            for (a, b) in self.color.0.iter_mut().zip(color.0.iter()) {
-                *a += u32::from(*b)
-            } 
+            add_colors(&mut self.color, &color);
             self.pixel_count += 1;
             return;
         }
@@ -187,9 +234,7 @@ impl OctreeNode {
                     leaves_removed += 1;
                 }
                 self.pixel_count += borrowed_child.pixel_count;
-                for (own_color, child_color) in self.color.0.iter_mut().zip(borrowed_child.color.0.iter()) {
-                    *own_color += u32::from(*child_color);
-                }
+                add_colors(&mut self.color, &borrowed_child.color);
             }
             *child = None;
         }

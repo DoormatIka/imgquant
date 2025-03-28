@@ -1,7 +1,7 @@
 
 pub mod core;
 
-use core::octree::Octree;
+use core::octree::{add_colors, div_colors, mul_colors, Octree};
 use std::{fs::File, path::{self, Path}, time::{Duration, Instant}};
 use image::{DynamicImage, GenericImage, GenericImageView, Pixel, Rgb, RgbImage, Rgba, RgbaImage};
 
@@ -181,19 +181,21 @@ fn sierra_lite(source: &DynamicImage, destination: &mut RgbaImage) {
         let x = pixel.0 as usize;
         let y = pixel.1 as usize;
         let rgba: [u8; 4] = pixel.2.0;
-        // NOTES:
+        // TODO:
         //
-        // quant color using the octree
+        // quant color using the octree instead.
         let grayscale = (f32::from(rgba[0]) * 0.2126 
             + f32::from(rgba[1]) * 0.7152 
             + f32::from(rgba[2]) * 0.0722)
         .round()
         .clamp(0.0, 255.0) as i16;
-        // corrected grayscale will probably be adding the rgb values then averaging them, then
-        // pushing them back into the octree to get another value.
+
+        // corrected grayscale will probably be adding the rgb values then averaging them (TODO)
         let corrected_grayscale = (grayscale + current_errors[x as usize]).clamp(0, 255);
+        // pushing them back into the octree to get another value (TODO)
         let bw_color: u8 = if corrected_grayscale <= 127 { 0 } else { 255 };
 
+        // representing the error as an Rgb<u64> (TODO)
         let color_error = corrected_grayscale - i16::from(bw_color);
 
         // https://tannerhelland.com/2012/12/28/dithering-eleven-algorithms-source-code.html
@@ -213,6 +215,53 @@ fn sierra_lite(source: &DynamicImage, destination: &mut RgbaImage) {
     }
 }
 
+fn sierra_lite_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut RgbImage) {
+    let image_width = source.width() as usize;
+
+    let mut current_errors = vec![Rgb::<u8>([0, 0, 0]); image_width + 1];
+    let mut forward_errors = vec![Rgb::<u8>([0, 0, 0]); image_width + 1];
+
+    for pixel in source.pixels() {
+        let x = pixel.0 as usize;
+        let y = pixel.1 as usize;
+        let rgb = pixel.2.to_rgb();
+        // TODO:
+        // quant color using the octree instead.
+        let corrected_color = Rgb([
+            rgb.0[0].saturating_add(current_errors[x as usize].0[0]),
+            rgb.0[1].saturating_add(current_errors[x as usize].0[1]),
+            rgb.0[2].saturating_add(current_errors[x as usize].0[2]),
+        ]);
+        let index = octree.get_palette_index(corrected_color);
+        let quantized_color = palette[index.unwrap()];
+        // representing the error as an Rgb<u64> (TODO)
+
+        let color_error = Rgb([
+            rgb.0[0].saturating_sub(quantized_color.0[0]),
+            rgb.0[1].saturating_sub(quantized_color.0[1]),
+            rgb.0[2].saturating_sub(quantized_color.0[2]),
+        ]);
+        // https://tannerhelland.com/2012/12/28/dithering-eleven-algorithms-source-code.html
+        // https://www.youtube.com/watch?v=ico4fJfohMQ
+        let forward_x = (x + 1).clamp(0, image_width) as usize;
+        let behind_x = if x <= 0 { 0 } else { (x - 1).clamp(0, image_width) as usize };
+        add_colors(&mut current_errors[forward_x], &div_colors(&mut mul_colors(&color_error, &Rgb([2, 2, 2])), &Rgb([4, 4, 4])));
+        // current_errors[forward_x] += color_error * 2 / 4;
+        add_colors(&mut forward_errors[behind_x], &div_colors(&color_error, &Rgb([4, 4, 4])));
+        // forward_errors[behind_x] += color_error / 4;
+        add_colors(&mut forward_errors[x], &div_colors(&color_error, &Rgb([4, 4, 4])));
+        // forward_errors[x] += color_error / 4;
+        
+        destination.put_pixel(x as u32, y as u32, quantized_color);
+
+        if x >= image_width - 1 {
+            current_errors.clone_from_slice(&forward_errors);
+            forward_errors.fill(Rgb([0, 0, 0]));
+        }
+    }
+}
+
+/*
 fn main() {
     let source_path = Path::new("images/sakuya_gardening.png");
     let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
@@ -225,53 +274,41 @@ fn main() {
     let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
     new_img.save(absolute_source_path);
 }
+*/
 
-/*
 fn main() {
-    let source_path = Path::new("images/suwako.png");
+    let source_path = Path::new("images/Portal_Companion_Cube.png");
     let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
     let img = image::open(absolute_source_path).unwrap();
 
     let mut recursive_octree = Octree::new();
 
-    let mut colors: Vec<Rgb<u8>> = vec![];
-    for (_, _, rgba) in img.pixels() {
-        colors.push(rgba.to_rgb());
-    }
-
     let start = Instant::now();
-    for color in colors {
-        recursive_octree.add_color(color);
+    for (_, _, rgba) in img.pixels() {
+        recursive_octree.add_color(rgba.to_rgb());
     }
 
     println!("\nseconds to initialize: {:?}", Instant::now() - start);
     println!("Tree leaves length: {}", recursive_octree.get_leaf_nodes().len());
 
-    let palette = recursive_octree.make_palette(16);
+    let palette = recursive_octree.make_palette(256);
     println!("Tree leaves after quant length: {}", recursive_octree.get_leaf_nodes().len());
 
     let mut new_img = image::RgbImage::new(img.width(), img.height());
 
     let start = Instant::now();
 
-    for x in 0..new_img.width() {
-        for y in 0..new_img.height() {
-            let pixel = img.get_pixel(x, y).to_rgb();
-            let palette_index = recursive_octree.get_palette_index(pixel);
-            match palette_index {
-                Some(palette_index) => new_img.put_pixel(x, y, palette[palette_index]),
-                None => println!("Couldn't find palette index for {} {}", x, y),
-            }
-        }
-    }
+    sierra_lite_full_color(&recursive_octree, &palette, &img, &mut new_img);
 
     let duration = start.elapsed();
     println!("Quantization took: {:?}", duration);
     println!("Time per pixel: {:.6} ms", duration.as_secs_f64() / (new_img.width() * new_img.height()) as f64 * 1000.0);
+    println!("Pixels: {}", new_img.width() * new_img.height());
 
-    let source_path = Path::new("images/suwako_quant.png");
+    let source_path = Path::new("images/Portal_Companion_Cube_sierra_lite_dither.png");
     let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
-    new_img.save(absolute_source_path);
+    if let Err(err) = new_img.save(absolute_source_path) {
+        println!("Image Save Error: {}", err);
+    }
 }
-*/
 

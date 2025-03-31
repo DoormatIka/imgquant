@@ -215,6 +215,20 @@ fn sierra_lite(source: &DynamicImage, destination: &mut RgbaImage) {
     }
 }
 
+// full color.
+pub fn color_diff(lhs: &Rgb<u8>, rhs: &Rgb<u8>) -> u32 {
+    let delta_r = lhs.0[0] as i32 - rhs.0[0] as i32;
+    let delta_g = lhs.0[1] as i32 - rhs.0[1] as i32;
+    let delta_b = lhs.0[2] as i32 - rhs.0[2] as i32;
+
+    (3 * delta_r * delta_r + 6 * delta_g * delta_g + delta_b * delta_b) as u32
+}
+
+fn dither_apply_error(pixel_coords: (usize, usize), color: &Rgb<u8>, corrected_color: &Rgb<u8>) {
+    let col: u32 = 0;
+
+}
+
 fn sierra_lite_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut RgbImage) {
     let image_width = source.width() as usize;
 

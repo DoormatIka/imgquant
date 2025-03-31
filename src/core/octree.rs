@@ -3,6 +3,7 @@ use core::fmt;
 use std::{cell::RefCell, ops::{AddAssign, Sub, Mul, Div}, rc::{Rc, Weak}};
 
 use image::Rgb;
+// note: 0, 1, 2 corresponds to R, G, B
 
 pub fn get_color_index(color: Rgb<u8>, level: usize) -> usize {
     let mut index: usize = 0;
@@ -256,3 +257,6 @@ impl fmt::Display for OctreeNode {
         write!(f, "<color: #{:02X}{:02X}{:02X}, pixel_count: {}, children: [{}]>", r, g, b, self.pixel_count, children.join(", "))
     }
 }
+
+
+

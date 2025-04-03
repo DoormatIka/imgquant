@@ -2,7 +2,7 @@
 pub mod core;
 
 use core::octree::{add_colors, div_colors, mul_colors, Octree};
-use std::{fs::File, path::{self, Path}, time::{Duration, Instant}};
+use std::{fs::File, path::{self, Path}, time::{Duration, Instant}, u8};
 use image::{DynamicImage, GenericImage, GenericImageView, Pixel, Rgb, RgbImage, Rgba, RgbaImage};
 
 fn grayscale(source: &DynamicImage, destination: &mut RgbaImage) {
@@ -224,55 +224,45 @@ pub fn color_diff(lhs: &Rgb<u8>, rhs: &Rgb<u8>) -> u32 {
     (3 * delta_r * delta_r + 6 * delta_g * delta_g + delta_b * delta_b) as u32
 }
 
-fn dither_apply_error(pixel_coords: (usize, usize), color: &Rgb<u8>, corrected_color: &Rgb<u8>) {
-    let col: u32 = 0;
+struct Dither {
+    width: u32,
+    current_row: usize,
+    errors: Vec<Rgb<u8>>,
+}
 
+const DITHER_COEF_DIVIDER: u8 = 16;
+fn dither_apply_error(err_color: &Rgb<u8>, color: &Rgb<u8>, corrected_color: &mut Rgb<u8>) {
+    let [err_r, err_g, err_b] = err_color.0;
+    let [src_r, src_g, src_b] = color.0;
+    let [dest_r, dest_g, dest_b] = &mut corrected_color.0;
+
+    let r = src_r + err_r / DITHER_COEF_DIVIDER;
+    let g = src_g + err_g / DITHER_COEF_DIVIDER;
+    let b = src_b + err_b / DITHER_COEF_DIVIDER;
+
+    *dest_r = r.max(r).min(u8::MAX);
+    *dest_g = g.max(g).min(u8::MAX);
+    *dest_b = b.max(b).min(u8::MAX);
 }
 
 fn sierra_lite_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut RgbImage) {
     let image_width = source.width() as usize;
 
-    let mut current_errors = vec![Rgb::<u8>([0, 0, 0]); image_width + 1];
-    let mut forward_errors = vec![Rgb::<u8>([0, 0, 0]); image_width + 1];
-
     for pixel in source.pixels() {
         let x = pixel.0 as usize;
         let y = pixel.1 as usize;
         let rgb = pixel.2.to_rgb();
-        // TODO:
+        // todo:
+        // - apply error
+        // - get nearest color from palette (using color_diff func)
+        // - diffuse error
         // quant color using the octree instead.
-        let corrected_color = Rgb([
-            rgb.0[0].saturating_add(current_errors[x as usize].0[0]),
-            rgb.0[1].saturating_add(current_errors[x as usize].0[1]),
-            rgb.0[2].saturating_add(current_errors[x as usize].0[2]),
-        ]);
-        let index = octree.get_palette_index(corrected_color);
+        let index = octree.get_palette_index(rgb);
         let quantized_color = palette[index.unwrap()];
-        // representing the error as an Rgb<u64> (TODO)
-
-        let color_error = Rgb([
-            rgb.0[0].saturating_sub(quantized_color.0[0]),
-            rgb.0[1].saturating_sub(quantized_color.0[1]),
-            rgb.0[2].saturating_sub(quantized_color.0[2]),
-        ]);
-        // https://tannerhelland.com/2012/12/28/dithering-eleven-algorithms-source-code.html
-        // https://www.youtube.com/watch?v=ico4fJfohMQ
-        let forward_x = (x + 1).clamp(0, image_width) as usize;
-        let behind_x = if x <= 0 { 0 } else { (x - 1).clamp(0, image_width) as usize };
-        add_colors(&mut current_errors[forward_x], &div_colors(&mut mul_colors(&color_error, &Rgb([2, 2, 2])), &Rgb([4, 4, 4])));
-        // current_errors[forward_x] += color_error * 2 / 4;
-        add_colors(&mut forward_errors[behind_x], &div_colors(&color_error, &Rgb([4, 4, 4])));
-        // forward_errors[behind_x] += color_error / 4;
-        add_colors(&mut forward_errors[x], &div_colors(&color_error, &Rgb([4, 4, 4])));
-        // forward_errors[x] += color_error / 4;
-        
         destination.put_pixel(x as u32, y as u32, quantized_color);
-
-        if x >= image_width - 1 {
-            current_errors.clone_from_slice(&forward_errors);
-            forward_errors.fill(Rgb([0, 0, 0]));
-        }
     }
+
+
 }
 
 /*

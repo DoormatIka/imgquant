@@ -105,8 +105,6 @@ impl Octree {
 
                     }
                 }
-                // ISSUE: leaf_count is not representative of the true leaf count of the octree.
-                // something is going wrong with node.remove_leaves()
             }
             if leaf_count <= color_count {
                 break;

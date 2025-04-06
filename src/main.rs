@@ -2,7 +2,7 @@
 pub mod core;
 
 use core::octree::{add_colors, div_colors, mul_colors, Octree};
-use std::{fs::File, path::{self, Path}, time::{Duration, Instant}, u8};
+use std::{fs::File, path::{self, Path}, time::{Duration, Instant}, u32, u8};
 use image::{DynamicImage, GenericImage, GenericImageView, Pixel, Rgb, RgbImage, Rgba, RgbaImage};
 
 fn grayscale(source: &DynamicImage, destination: &mut RgbaImage) {
@@ -230,40 +230,75 @@ struct Dither {
     errors: Vec<Rgb<u8>>,
 }
 
+// low hanging optimization: in place modification of rgb color.
 const DITHER_COEF_DIVIDER: u8 = 16;
-fn dither_apply_error(err_color: &Rgb<u8>, color: &Rgb<u8>, corrected_color: &mut Rgb<u8>) {
+const COLOR_DIFF_THRESHOLD: u32 = 10;
+fn dither_apply_error(err_color: &Rgb<u8>, color: &Rgb<u8>) -> Rgb<u8> {
     let [err_r, err_g, err_b] = err_color.0;
     let [src_r, src_g, src_b] = color.0;
-    let [dest_r, dest_g, dest_b] = &mut corrected_color.0;
 
     let r = src_r + err_r / DITHER_COEF_DIVIDER;
     let g = src_g + err_g / DITHER_COEF_DIVIDER;
     let b = src_b + err_b / DITHER_COEF_DIVIDER;
 
-    *dest_r = r.max(r).min(u8::MAX);
-    *dest_g = g.max(g).min(u8::MAX);
-    *dest_b = b.max(b).min(u8::MAX);
+    let dest_r = r.max(r).min(u8::MAX);
+    let dest_g = g.max(g).min(u8::MAX);
+    let dest_b = b.max(b).min(u8::MAX);
+
+    Rgb([dest_r, dest_g, dest_b])
+}
+
+fn nearest_color_from_palette(palette: &Vec<Rgb<u8>>, rgb: &Rgb<u8>) -> usize {
+    let mut smallest_diff = u32::MAX;
+    let mut palette_index: usize = 0;
+    for palette_rgb in palette {
+        let diff = color_diff(palette_rgb, rgb);
+        if diff < COLOR_DIFF_THRESHOLD {
+            return palette_index;
+        }
+        if diff < smallest_diff {
+            smallest_diff = diff;
+        }
+
+        palette_index += 1;
+    }
+
+    palette_index
+}
+
+fn diffuse_error() {
+    // params:
+    // big vector []
+    // width
+    // x, y
+    //
+    // (y * width) + x = vector index
+    // pre-allocate vector error >> vec![Rgb::<u8>; width * height];
+    // sierra lite algo plspls 
 }
 
 fn sierra_lite_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut RgbImage) {
     let image_width = source.width() as usize;
 
-    for pixel in source.pixels() {
-        let x = pixel.0 as usize;
-        let y = pixel.1 as usize;
-        let rgb = pixel.2.to_rgb();
-        // todo:
-        // - apply error
-        // - get nearest color from palette (using color_diff func)
-        // - diffuse error
-        // quant color using the octree instead.
+    for (x, y, rgba) in source.pixels() {
+        let rgb = rgba.to_rgb();
         let index = octree.get_palette_index(rgb);
         let quantized_color = palette[index.unwrap()];
         destination.put_pixel(x as u32, y as u32, quantized_color);
     }
 
-
+    let dither_rgb = Rgb::<u8>([0, 0, 0]);
+    for (x, y, rgba) in source.pixels() {
+        let rgb = rgba.to_rgb();
+        // todo:
+        // - apply error
+        let corrected_rgb = dither_apply_error(&dither_rgb, &rgb);
+        // - get nearest color from palette (using color_diff func)
+        let corrected_palette_rgb = nearest_color_from_palette(palette, &corrected_rgb);
+        // - diffuse error
+    }
 }
+
 
 /*
 fn main() {

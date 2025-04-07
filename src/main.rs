@@ -224,24 +224,25 @@ pub fn color_diff(lhs: &Rgb<u8>, rhs: &Rgb<u8>) -> u32 {
     (3 * delta_r * delta_r + 6 * delta_g * delta_g + delta_b * delta_b) as u32
 }
 
-
 // low hanging optimizations: 
 // - in place modification of rgb color.
-const DITHER_COEF_DIVIDER: u8 = 16;
+const DITHER_COEF_DIVIDER: i16 = 16;
 const COLOR_DIFF_THRESHOLD: u32 = 10;
 fn dither_apply_error(err_color: &Rgb<i16>, color: &Rgb<u8>) -> Rgb<u8> {
     let [err_r, err_g, err_b] = err_color.0;
-    let [src_r, src_g, src_b] = color.0;
+    let [src_r, src_g, src_b] = color.0.map(|c| i16::from(c));
 
-    let r = src_r + err_r as u8 / DITHER_COEF_DIVIDER;
-    let g = src_g + err_g as u8 / DITHER_COEF_DIVIDER;
-    let b = src_b + err_b as u8 / DITHER_COEF_DIVIDER;
+    let r = src_r + (err_r / DITHER_COEF_DIVIDER);
+    let g = src_g + (err_g / DITHER_COEF_DIVIDER);
+    let b = src_b + (err_b / DITHER_COEF_DIVIDER);
 
-    let dest_r = r.max(r).min(u8::MAX);
-    let dest_g = g.max(g).min(u8::MAX);
-    let dest_b = b.max(b).min(u8::MAX);
+    let dest_r = r.max(r).min(u8::MAX.into()) as u8;
+    let dest_g = g.max(g).min(u8::MAX.into()) as u8;
+    let dest_b = b.max(b).min(u8::MAX.into()) as u8;
 
-    Rgb([dest_r, dest_g, dest_b])
+    let rgb = Rgb([dest_r, dest_g, dest_b]);
+
+    rgb
 }
 
 fn nearest_color_from_palette(palette: &Vec<Rgb<u8>>, rgb: &Rgb<u8>) -> usize {
@@ -254,8 +255,8 @@ fn nearest_color_from_palette(palette: &Vec<Rgb<u8>>, rgb: &Rgb<u8>) -> usize {
         }
         if diff < smallest_diff {
             smallest_diff = diff;
+            palette_index += 1;
         }
-        palette_index += 1;
     }
 
     cmp::min(palette_index, palette.len() - 1)
@@ -281,14 +282,13 @@ fn diffuse_error(error_vec: &mut Vec<Rgb<i16>>, width: usize, x: usize, y: usize
     let b_error = src_g as i16 - corr_g as i16;
 
     // sierra lite.
-    if error_index + 1 >= error_vec.len() - 2 {
+    if error_index + 1 <= error_vec.len() - 1 {
         add_colors(&mut error_vec[error_index + 1], &Rgb::<i16>([r_error * 2 / 4, g_error * 2 / 4, b_error * 2 / 4]));
     }
-    if next_row_error_index >= error_vec.len() - 2 {
-        print!("{} {}, ", next_row_error_index, error_vec.len() - 1);
+    if next_row_error_index + 1 <= error_vec.len() - 1 {
         add_colors(&mut error_vec[next_row_error_index + 1], &Rgb::<i16>([r_error / 4, g_error / 4, b_error / 4]));
     }
-    if next_row_error_index >= error_vec.len() - 2 {
+    if next_row_error_index <= error_vec.len() - 1 {
         add_colors(&mut error_vec[next_row_error_index], &Rgb::<i16>([r_error / 4, g_error / 4, b_error / 4]));
     }
 }
@@ -337,7 +337,7 @@ fn main() {
 */
 
 fn main() {
-    let source_path = Path::new("images/Portal_Companion_Cube.png");
+    let source_path = Path::new("images/suwako.png");
     let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
     let img = image::open(absolute_source_path).unwrap();
 
@@ -365,7 +365,7 @@ fn main() {
     println!("Time per pixel: {:.6} ms", duration.as_secs_f64() / (new_img.width() * new_img.height()) as f64 * 1000.0);
     println!("Pixels: {}", new_img.width() * new_img.height());
 
-    let source_path = Path::new("images/Portal_Companion_Cube_sierra_lite_dither.png");
+    let source_path = Path::new("images/suwako_dither_sierra_lite.png");
     let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
     if let Err(err) = new_img.save(absolute_source_path) {
         println!("Image Save Error: {}", err);

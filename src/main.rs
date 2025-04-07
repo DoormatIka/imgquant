@@ -2,7 +2,7 @@
 pub mod core;
 
 use core::octree::{add_colors, div_colors, mul_colors, Octree};
-use std::{fs::File, path::{self, Path}, time::{Duration, Instant}, u32, u8};
+use std::{cmp, fs::File, path::{self, Path}, time::{Duration, Instant}, u32, u8};
 use image::{DynamicImage, GenericImage, GenericImageView, Pixel, Rgb, RgbImage, Rgba, RgbaImage};
 
 fn grayscale(source: &DynamicImage, destination: &mut RgbaImage) {
@@ -224,22 +224,18 @@ pub fn color_diff(lhs: &Rgb<u8>, rhs: &Rgb<u8>) -> u32 {
     (3 * delta_r * delta_r + 6 * delta_g * delta_g + delta_b * delta_b) as u32
 }
 
-struct Dither {
-    width: u32,
-    current_row: usize,
-    errors: Vec<Rgb<u8>>,
-}
 
-// low hanging optimization: in place modification of rgb color.
+// low hanging optimizations: 
+// - in place modification of rgb color.
 const DITHER_COEF_DIVIDER: u8 = 16;
 const COLOR_DIFF_THRESHOLD: u32 = 10;
-fn dither_apply_error(err_color: &Rgb<u8>, color: &Rgb<u8>) -> Rgb<u8> {
+fn dither_apply_error(err_color: &Rgb<i16>, color: &Rgb<u8>) -> Rgb<u8> {
     let [err_r, err_g, err_b] = err_color.0;
     let [src_r, src_g, src_b] = color.0;
 
-    let r = src_r + err_r / DITHER_COEF_DIVIDER;
-    let g = src_g + err_g / DITHER_COEF_DIVIDER;
-    let b = src_b + err_b / DITHER_COEF_DIVIDER;
+    let r = src_r + err_r as u8 / DITHER_COEF_DIVIDER;
+    let g = src_g + err_g as u8 / DITHER_COEF_DIVIDER;
+    let b = src_b + err_b as u8 / DITHER_COEF_DIVIDER;
 
     let dest_r = r.max(r).min(u8::MAX);
     let dest_g = g.max(g).min(u8::MAX);
@@ -259,26 +255,47 @@ fn nearest_color_from_palette(palette: &Vec<Rgb<u8>>, rgb: &Rgb<u8>) -> usize {
         if diff < smallest_diff {
             smallest_diff = diff;
         }
-
         palette_index += 1;
     }
 
-    palette_index
+    cmp::min(palette_index, palette.len() - 1)
 }
 
-fn diffuse_error() {
+// pre-allocated error_vec.
+fn diffuse_error(error_vec: &mut Vec<Rgb<i16>>, width: usize, x: usize, y: usize, src_color: &Rgb<u8>, corrected_color: &Rgb<u8>) {
     // params:
-    // big vector []
+    // big error vector []
     // width
     // x, y
     //
     // (y * width) + x = vector index
     // pre-allocate vector error >> vec![Rgb::<u8>; width * height];
-    // sierra lite algo plspls 
+
+    let [src_r, src_b, src_g] = src_color.0;
+    let [corr_r, corr_b, corr_g] = corrected_color.0;
+    let error_index = (width * y) + x;
+    let next_row_error_index = (width * (y + 1)) + x;
+
+    let r_error = src_r as i16 - corr_r as i16;
+    let g_error = src_b as i16 - corr_b as i16;
+    let b_error = src_g as i16 - corr_g as i16;
+
+    // sierra lite.
+    if error_index + 1 >= error_vec.len() - 2 {
+        add_colors(&mut error_vec[error_index + 1], &Rgb::<i16>([r_error * 2 / 4, g_error * 2 / 4, b_error * 2 / 4]));
+    }
+    if next_row_error_index >= error_vec.len() - 2 {
+        print!("{} {}, ", next_row_error_index, error_vec.len() - 1);
+        add_colors(&mut error_vec[next_row_error_index + 1], &Rgb::<i16>([r_error / 4, g_error / 4, b_error / 4]));
+    }
+    if next_row_error_index >= error_vec.len() - 2 {
+        add_colors(&mut error_vec[next_row_error_index], &Rgb::<i16>([r_error / 4, g_error / 4, b_error / 4]));
+    }
 }
 
 fn sierra_lite_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut RgbImage) {
     let image_width = source.width() as usize;
+    let mut error_vec = vec![Rgb::<i16>([0, 0, 0]); (source.width() * source.height()) as usize];
 
     for (x, y, rgba) in source.pixels() {
         let rgb = rgba.to_rgb();
@@ -287,15 +304,19 @@ fn sierra_lite_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &Dyna
         destination.put_pixel(x as u32, y as u32, quantized_color);
     }
 
-    let dither_rgb = Rgb::<u8>([0, 0, 0]);
     for (x, y, rgba) in source.pixels() {
         let rgb = rgba.to_rgb();
-        // todo:
         // - apply error
+        let error_index = (image_width * y as usize) + x as usize;
+        let dither_rgb = error_vec[error_index];
         let corrected_rgb = dither_apply_error(&dither_rgb, &rgb);
         // - get nearest color from palette (using color_diff func)
-        let corrected_palette_rgb = nearest_color_from_palette(palette, &corrected_rgb);
+        let palette_index = nearest_color_from_palette(palette, &corrected_rgb);
         // - diffuse error
+        let palette_color = palette[palette_index];
+        diffuse_error(&mut error_vec, image_width, x as usize, y as usize, &corrected_rgb, &palette_color);
+
+        destination.put_pixel(x as u32, y as u32, palette_color);
     }
 }
 

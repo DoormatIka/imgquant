@@ -2,39 +2,9 @@
 pub mod core;
 
 use core::octree::{add_colors, div_colors, mul_colors, Octree};
-use std::{cmp, fs::File, path::{self, Path}, time::{Duration, Instant}, u32, u8};
+use std::{cmp, env, fs::File, path::{self, Path, PathBuf}, time::{Duration, Instant}, u32, u8};
+use getargs::{Arg, Options};
 use image::{DynamicImage, GenericImage, GenericImageView, Pixel, Rgb, RgbImage, Rgba, RgbaImage};
-
-fn grayscale(source: &DynamicImage, destination: &mut RgbaImage) {
-    for pixel in source.pixels() {
-        let x = pixel.0;
-        let y = pixel.1;
-        let rgba: [u8; 4] = pixel.2.0;
-        let grayscale = (f32::from(rgba[0]) * 0.2126 
-            + f32::from(rgba[1]) * 0.7152 
-            + f32::from(rgba[2]) * 0.0722)
-        .round()
-        .clamp(0.0, 255.0) as u8;
-
-        destination.put_pixel(x, y, Rgba([grayscale, grayscale, grayscale, rgba[3]]));
-    }
-}
-
-fn bw_quant(source: &DynamicImage, destination: &mut RgbaImage) {
-    for pixel in source.pixels() {
-        let x = pixel.0;
-        let y = pixel.1;
-        let rgba: [u8; 4] = pixel.2.0;
-        let grayscale = (f32::from(rgba[0]) * 0.2126 
-            + f32::from(rgba[1]) * 0.7152 
-            + f32::from(rgba[2]) * 0.0722)
-        .round()
-        .clamp(0.0, 255.0) as u8;
-        let bw_color = if grayscale <= 127 { 0 } else { 255 };
-
-        destination.put_pixel(x, y, Rgba([bw_color, bw_color, bw_color, rgba[3]]));
-    }
-}
 
 fn bw_quant_basic_dithering(source: &DynamicImage, destination: &mut RgbaImage) {
     let mut color_error: i16 = 0;
@@ -64,6 +34,7 @@ fn bw_quant_basic_dithering(source: &DynamicImage, destination: &mut RgbaImage) 
     }
 }
 
+// cool as hell filter i stumbled into accidentally.
 fn bw_quant_line_filter(source: &DynamicImage, destination: &mut RgbImage) {
     let mut color_error: i16 = 0;
     let image_width = source.width();
@@ -171,6 +142,7 @@ fn bw_quant_sierra_lite_dither(source: &DynamicImage, destination: &mut RgbaImag
     }
 }
 
+// black and white version!
 fn sierra_lite(source: &DynamicImage, destination: &mut RgbaImage) {
     let image_width = source.width() as usize;
 
@@ -181,9 +153,6 @@ fn sierra_lite(source: &DynamicImage, destination: &mut RgbaImage) {
         let x = pixel.0 as usize;
         let y = pixel.1 as usize;
         let rgba: [u8; 4] = pixel.2.0;
-        // TODO:
-        //
-        // quant color using the octree instead.
         let grayscale = (f32::from(rgba[0]) * 0.2126 
             + f32::from(rgba[1]) * 0.7152 
             + f32::from(rgba[2]) * 0.0722)
@@ -247,39 +216,31 @@ fn dither_apply_error(err_color: &Rgb<i16>, color: &Rgb<u8>) -> Rgb<u8> {
 
 fn nearest_color_from_palette(palette: &Vec<Rgb<u8>>, rgb: &Rgb<u8>) -> usize {
     let mut smallest_diff = u32::MAX;
-    let mut palette_index: usize = 0;
-    for palette_rgb in palette {
+    let mut best_index: usize = 0;
+    for (i, palette_rgb) in palette.iter().enumerate() {
         let diff = color_diff(palette_rgb, rgb);
         if diff < COLOR_DIFF_THRESHOLD {
-            return palette_index;
+            return i;
         }
         if diff < smallest_diff {
             smallest_diff = diff;
-            palette_index += 1;
+            best_index = i;
         }
     }
 
-    cmp::min(palette_index, palette.len() - 1)
+    best_index
 }
 
 // pre-allocated error_vec.
 fn diffuse_error(error_vec: &mut Vec<Rgb<i16>>, width: usize, x: usize, y: usize, src_color: &Rgb<u8>, corrected_color: &Rgb<u8>) {
-    // params:
-    // big error vector []
-    // width
-    // x, y
-    //
-    // (y * width) + x = vector index
-    // pre-allocate vector error >> vec![Rgb::<u8>; width * height];
-
-    let [src_r, src_b, src_g] = src_color.0;
-    let [corr_r, corr_b, corr_g] = corrected_color.0;
+    let [src_r, src_g, src_b] = src_color.0;
+    let [corr_r, corr_g, corr_b] = corrected_color.0;
     let error_index = (width * y) + x;
     let next_row_error_index = (width * (y + 1)) + x;
 
     let r_error = src_r as i16 - corr_r as i16;
-    let g_error = src_b as i16 - corr_b as i16;
-    let b_error = src_g as i16 - corr_g as i16;
+    let g_error = src_g as i16 - corr_g as i16;
+    let b_error = src_b as i16 - corr_b as i16;
 
     // sierra lite.
     if error_index + 1 <= error_vec.len() - 1 {
@@ -311,7 +272,8 @@ fn sierra_lite_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &Dyna
         let dither_rgb = error_vec[error_index];
         let corrected_rgb = dither_apply_error(&dither_rgb, &rgb);
         // - get nearest color from palette (using color_diff func)
-        let palette_index = nearest_color_from_palette(palette, &corrected_rgb);
+        let palette_index = octree.get_palette_index(corrected_rgb).expect("Octree on dither palette_index couldn't find a color!");
+        // let palette_index = nearest_color_from_palette(palette, &corrected_rgb);
         // - diffuse error
         let palette_color = palette[palette_index];
         diffuse_error(&mut error_vec, image_width, x as usize, y as usize, &corrected_rgb, &palette_color);
@@ -320,26 +282,59 @@ fn sierra_lite_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &Dyna
     }
 }
 
+fn add_to_filename(path: &Path, addition: &str) -> PathBuf {
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let extension = path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
 
-/*
-fn main() {
-    let source_path = Path::new("images/sakuya_gardening.png");
-    let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
-    let img = image::open(absolute_source_path).unwrap();
-    let mut new_img = image::RgbImage::new(img.width(), img.height());
-
-    bw_quant_line_filter(&img, &mut new_img);
-
-    let source_path = Path::new("images/sakuya_line_filter.png");
-    let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
-    new_img.save(absolute_source_path);
+    let new_filename = format!("{}{}{}", stem, addition, extension);
+    parent.join(new_filename)
 }
-*/
+
 
 fn main() {
-    let source_path = Path::new("images/suwako.png");
+    let args: Vec<String> = env::args().skip(1).collect();
+    let mut opts = Options::new(args.iter().map(String::as_str));
+    let mut source_path: Option<&Path> = None;
+    let mut color_size: Option<i32> = Some(256);
+
+    while let Some(arg) = opts.next_arg().expect("Parsing error.") {
+        match arg {
+            Arg::Short('i') | Arg::Long("input") => {
+                let opt = opts.value();
+                match opt {
+                    Ok(s) => source_path.replace(Path::new(s)),
+                    Err(e) => panic!("{}", e)
+                };
+            }
+            Arg::Short('c') | Arg::Long("color") => {
+                let opt = opts.value();
+                match opt {
+                    Ok(s) => {
+                        let res = s.parse::<i32>();
+                        match res {
+                            Ok(res) =>
+                                if res < 8 {
+                                    color_size.replace(res);
+                                } else {
+                                    panic!("Color is below 8!");
+                                }
+                            Err(_) => panic!("Color is not a number!"),
+                        };
+                    }
+                    Err(e) => panic!("{}", e)
+                };
+            }
+            Arg::Positional(_) | Arg::Short(_) | Arg::Long(_) => {}
+        }
+    }
+    let source_path = source_path.expect("Set your input man.");
+    let dest_path = add_to_filename(source_path, "_quant_dither");
     let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
-    let img = image::open(absolute_source_path).unwrap();
+    let absolute_dest_path = path::absolute(dest_path).unwrap().into_os_string().into_string().unwrap();
+
+    let img = image::open(absolute_source_path).expect("Can't find the file specified.");
+    let mut new_img = image::RgbImage::new(img.width(), img.height());
 
     let mut recursive_octree = Octree::new();
 
@@ -349,25 +344,22 @@ fn main() {
     }
 
     println!("\nseconds to initialize: {:?}", Instant::now() - start);
-    println!("Tree leaves length: {}", recursive_octree.get_leaf_nodes().len());
+    println!("Tree leaves count before quantization: {} color/s", recursive_octree.get_leaf_nodes().len());
 
-    let palette = recursive_octree.make_palette(256);
-    println!("Tree leaves after quant length: {}", recursive_octree.get_leaf_nodes().len());
+    let palette = recursive_octree.make_palette(color_size.expect("Set the color size."));
+    println!("Tree leaves count after quantization: {} color/s", recursive_octree.get_leaf_nodes().len());
 
-    let mut new_img = image::RgbImage::new(img.width(), img.height());
 
     let start = Instant::now();
 
     sierra_lite_full_color(&recursive_octree, &palette, &img, &mut new_img);
 
     let duration = start.elapsed();
-    println!("Quantization took: {:?}", duration);
+    println!("Image quantization took: {:?}", duration);
     println!("Time per pixel: {:.6} ms", duration.as_secs_f64() / (new_img.width() * new_img.height()) as f64 * 1000.0);
     println!("Pixels: {}", new_img.width() * new_img.height());
 
-    let source_path = Path::new("images/suwako_dither_sierra_lite.png");
-    let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
-    if let Err(err) = new_img.save(absolute_source_path) {
+    if let Err(err) = new_img.save(absolute_dest_path) {
         println!("Image Save Error: {}", err);
     }
 }

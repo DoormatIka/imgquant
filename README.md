@@ -1,14 +1,17 @@
 
 # imgquant
-incomplete.
+Simple image quantizer.
+
+`imgquant -- -i alice.png -c 256`
+
+### features
+- basic octree
+- sierra lite dithering
+- fairly fast (500ms~ on a 2304 x 1792 image)
 
 ### plans
+- clean everything up!
+- switch out String with OsString for cli.
 - octree with imagemagick's error pruning with YUV
-- dithering with sierra lite
-
-possible optimizations:
-- flattened octree to a vector to avoid indirection for every node.
-- option to turn off imagemagick's error pruning & switch to 4x4 8x8 bayes' ordered dithering
-
-### notes
-this is also a bet to see if array indexing is better than pointers for octrees.
+- flattened octree using morton order to avoid indirection for every node.
+- option to turn off sierra lite dithering & switch to 4x4 or 8x8 bayes' ordered dithering

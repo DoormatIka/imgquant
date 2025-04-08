@@ -14,6 +14,7 @@ Simple image quantizer.
 ### plans
 - clean everything up!
 - switch out String with OsString for cli.
+- fix sierra lite dithering causing massive artifacts
 - octree with imagemagick's error pruning with YUV
 - flattened octree using morton order to avoid indirection for every node.
 - option to turn off sierra lite dithering & switch to 4x4 or 8x8 bayes' ordered dithering

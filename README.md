@@ -2,7 +2,9 @@
 # imgquant
 Simple image quantizer.
 
-`imgquant -- -i alice.png -c 256`
+`imgquant --input [file path] --color [color count]`
+
+`imgquant -i alice.png -c 256`
 
 ### features
 - basic octree

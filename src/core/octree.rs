@@ -68,6 +68,7 @@ pub struct OctreeNode {
     color: Rgb<u32>,
     pixel_count: u32,
     palette_index: u32,
+    error_value: u32,
 }
 
 type LevelVec = [Vec<Weak<RefCell<OctreeNode>>>; MAX_DEPTH as usize];
@@ -165,6 +166,7 @@ impl OctreeNode {
             pixel_count: 0,
             palette_index: 0,
             children: std::array::from_fn(|_| None),
+            error_value: 0,
         }
     }
     pub fn add_color(&mut self, color: Rgb<u8>, level: usize, levels: &mut LevelVec) {

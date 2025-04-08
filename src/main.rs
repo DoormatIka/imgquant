@@ -185,25 +185,28 @@ fn sierra_lite(source: &DynamicImage, destination: &mut RgbaImage) {
 }
 
 // full color.
-pub fn color_diff(lhs: &Rgb<u8>, rhs: &Rgb<u8>) -> u32 {
-    let delta_r = lhs.0[0] as i32 - rhs.0[0] as i32;
-    let delta_g = lhs.0[1] as i32 - rhs.0[1] as i32;
-    let delta_b = lhs.0[2] as i32 - rhs.0[2] as i32;
+pub fn color_diff<L, R>(lhs: &Rgb<L>, rhs: &Rgb<R>) -> u32 
+where 
+    L: Copy,
+    R: Copy,
+    i32: From<L> + From<R>,
+{
+    let delta_r = i32::from(lhs.0[0]) - i32::from(rhs.0[0]);
+    let delta_g = i32::from(lhs.0[1]) - i32::from(rhs.0[1]);
+    let delta_b = i32::from(lhs.0[2]) - i32::from(rhs.0[2]);
 
     (3 * delta_r * delta_r + 6 * delta_g * delta_g + delta_b * delta_b) as u32
 }
 
 // low hanging optimizations: 
 // - in place modification of rgb color.
-const DITHER_COEF_DIVIDER: i16 = 16;
-const COLOR_DIFF_THRESHOLD: u32 = 10;
 fn dither_apply_error(err_color: &Rgb<i16>, color: &Rgb<u8>) -> Rgb<u8> {
     let [err_r, err_g, err_b] = err_color.0;
     let [src_r, src_g, src_b] = color.0.map(|c| i16::from(c));
 
-    let r = src_r + (err_r / DITHER_COEF_DIVIDER);
-    let g = src_g + (err_g / DITHER_COEF_DIVIDER);
-    let b = src_b + (err_b / DITHER_COEF_DIVIDER);
+    let r = src_r + err_r;
+    let g = src_g + err_g;
+    let b = src_b + err_b;
 
     let dest_r = r.max(r).min(u8::MAX.into()) as u8;
     let dest_g = g.max(g).min(u8::MAX.into()) as u8;
@@ -219,7 +222,7 @@ fn nearest_color_from_palette(palette: &Vec<Rgb<u8>>, rgb: &Rgb<u8>) -> usize {
     let mut best_index: usize = 0;
     for (i, palette_rgb) in palette.iter().enumerate() {
         let diff = color_diff(palette_rgb, rgb);
-        if diff < COLOR_DIFF_THRESHOLD {
+        if diff < 10 {
             return i;
         }
         if diff < smallest_diff {
@@ -243,7 +246,7 @@ fn diffuse_error(error_vec: &mut Vec<Rgb<i16>>, width: usize, x: usize, y: usize
     let b_error = src_b as i16 - corr_b as i16;
 
     // sierra lite.
-    if error_index + 1 <= error_vec.len() - 1 {
+    if error_index + 1 <= error_vec.len() - 1 { // changed all x / 4
         add_colors(&mut error_vec[error_index + 1], &Rgb::<i16>([r_error * 2 / 4, g_error * 2 / 4, b_error * 2 / 4]));
     }
     if next_row_error_index + 1 <= error_vec.len() - 1 {
@@ -254,31 +257,42 @@ fn diffuse_error(error_vec: &mut Vec<Rgb<i16>>, width: usize, x: usize, y: usize
     }
 }
 
-fn sierra_lite_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut RgbImage) {
+fn octree_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut DynamicImage) {
+    let (width, height) = source.dimensions();
+    for y in 0..height {
+        for x in 0..width {
+            let rgba = source.get_pixel(x, y);
+            let rgb = rgba.to_rgb();
+            let palette_index = octree.get_palette_index(rgb).expect("Octree on dither palette_index couldn't find a color!");
+            let palette_color = palette[palette_index];
+
+            destination.put_pixel(x as u32, y as u32, Rgba([palette_color.0[0], palette_color.0[1], palette_color.0[2], rgba.0[3]]));
+        }
+    }
+}
+
+fn sierra_lite_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut DynamicImage) {
     let image_width = source.width() as usize;
     let mut error_vec = vec![Rgb::<i16>([0, 0, 0]); (source.width() * source.height()) as usize];
 
-    for (x, y, rgba) in source.pixels() {
-        let rgb = rgba.to_rgb();
-        let index = octree.get_palette_index(rgb);
-        let quantized_color = palette[index.unwrap()];
-        destination.put_pixel(x as u32, y as u32, quantized_color);
-    }
+    let (width, height) = source.dimensions();
+    for y in 0..height {
+        for x in 0..width {
+            let rgba = source.get_pixel(x, y);
+            let rgb = rgba.to_rgb();
+            // - apply error
+            let error_index = (image_width * y as usize) + x as usize;
+            let dither_rgb = error_vec[error_index];
+            let corrected_rgb = dither_apply_error(&dither_rgb, &rgb);
+            // - get nearest color from palette
+            let palette_index = octree.get_palette_index(corrected_rgb).expect("Octree on dither palette_index couldn't find a color!");
+            // let palette_index = nearest_color_from_palette(palette, &corrected_rgb);
+            // - diffuse error
+            let palette_color = palette[palette_index];
+            diffuse_error(&mut error_vec, image_width, x as usize, y as usize, &corrected_rgb, &palette_color);
 
-    for (x, y, rgba) in source.pixels() {
-        let rgb = rgba.to_rgb();
-        // - apply error
-        let error_index = (image_width * y as usize) + x as usize;
-        let dither_rgb = error_vec[error_index];
-        let corrected_rgb = dither_apply_error(&dither_rgb, &rgb);
-        // - get nearest color from palette (using color_diff func)
-        let palette_index = octree.get_palette_index(corrected_rgb).expect("Octree on dither palette_index couldn't find a color!");
-        // let palette_index = nearest_color_from_palette(palette, &corrected_rgb);
-        // - diffuse error
-        let palette_color = palette[palette_index];
-        diffuse_error(&mut error_vec, image_width, x as usize, y as usize, &corrected_rgb, &palette_color);
-
-        destination.put_pixel(x as u32, y as u32, palette_color);
+            destination.put_pixel(x as u32, y as u32, Rgba([palette_color.0[0], palette_color.0[1], palette_color.0[2], rgba.0[3]]));
+        }
     }
 }
 
@@ -291,15 +305,31 @@ fn add_to_filename(path: &Path, addition: &str) -> PathBuf {
     parent.join(new_filename)
 }
 
+enum DitherMode {
+    Base,
+    SierraLite,
+}
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let mut opts = Options::new(args.iter().map(String::as_str));
     let mut source_path: Option<&Path> = None;
     let mut color_size: Option<i32> = Some(256);
+    let mut dither_mode = DitherMode::SierraLite;
 
     while let Some(arg) = opts.next_arg().expect("Parsing error.") {
         match arg {
+            Arg::Short('d') | Arg::Long("dither") => {
+                let opt = opts.value();
+                match opt {
+                    Ok(s) => match s {
+                        "base" => dither_mode = DitherMode::Base,
+                        "sierralite" => dither_mode = DitherMode::SierraLite,
+                        _ => panic!(r#""{}" is not a valid option! [base, sierra]"#, s)
+                    }
+                    Err(e) => panic!("{}", e)
+                };
+            }
             Arg::Short('i') | Arg::Long("input") => {
                 let opt = opts.value();
                 match opt {
@@ -314,10 +344,10 @@ fn main() {
                         let res = s.parse::<i32>();
                         match res {
                             Ok(res) =>
-                                if res < 8 {
+                                if res >= 2 {
                                     color_size.replace(res);
                                 } else {
-                                    panic!("Color is below 8!");
+                                    panic!("Color is below 2!");
                                 }
                             Err(_) => panic!("Color is not a number!"),
                         };
@@ -334,8 +364,8 @@ fn main() {
     let absolute_dest_path = path::absolute(dest_path).unwrap().into_os_string().into_string().unwrap();
 
     let img = image::open(absolute_source_path).expect("Can't find the file specified.");
-    let mut new_img = image::RgbImage::new(img.width(), img.height());
-
+    let new_img = RgbaImage::new(img.width(), img.height());
+    let mut new_img = DynamicImage::ImageRgba8(new_img);
     let mut recursive_octree = Octree::new();
 
     let start = Instant::now();
@@ -349,10 +379,12 @@ fn main() {
     let palette = recursive_octree.make_palette(color_size.expect("Set the color size."));
     println!("Tree leaves count after quantization: {} color/s", recursive_octree.get_leaf_nodes().len());
 
-
     let start = Instant::now();
 
-    sierra_lite_full_color(&recursive_octree, &palette, &img, &mut new_img);
+    match dither_mode {
+        DitherMode::Base => octree_full_color(&recursive_octree, &palette, &img, &mut new_img),
+        DitherMode::SierraLite => sierra_lite_full_color(&recursive_octree, &palette, &img, &mut new_img),
+    };
 
     let duration = start.elapsed();
     println!("Image quantization took: {:?}", duration);

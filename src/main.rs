@@ -2,9 +2,15 @@
 pub mod core;
 
 use core::octree::{add_colors, div_colors, mul_colors, Octree};
-use std::{cmp, env, fs::File, path::{self, Path, PathBuf}, time::{Duration, Instant}, u32, u8};
+use std::{cmp, env, fs::File, io::BufReader, path::{self, Path, PathBuf}, time::{Duration, Instant}, u32, u8};
 use getargs::{Arg, Options};
-use image::{ColorType, DynamicImage, GenericImage, GenericImageView, ImageBuffer, Pixel, Rgb, RgbImage, Rgba, RgbaImage};
+use image::{error, ColorType, DynamicImage, GenericImage, GenericImageView, ImageBuffer, Luma, Pixel, Rgb, RgbImage, Rgba, RgbaImage};
+
+enum DitherMode {
+    Base,
+    FloydSteinberg,
+    SierraLite,
+}
 
 fn bw_quant_basic_dithering(source: &DynamicImage, destination: &mut RgbaImage) {
     let mut color_error: i16 = 0;
@@ -204,13 +210,13 @@ fn dither_apply_error(err_color: &Rgb<i16>, color: &Rgb<u8>) -> Rgb<u8> {
     let [err_r, err_g, err_b] = err_color.0;
     let [src_r, src_g, src_b] = color.0.map(|c| i16::from(c));
 
-    let r = src_r + (err_r / 4);
-    let g = src_g + (err_g / 4);
-    let b = src_b + (err_b / 4);
+    let r = src_r + err_r;
+    let g = src_g + err_g;
+    let b = src_b + err_b;
 
-    let dest_r = r.max(r).min(u8::MAX.into()) as u8;
-    let dest_g = g.max(g).min(u8::MAX.into()) as u8;
-    let dest_b = b.max(b).min(u8::MAX.into()) as u8;
+    let dest_r = r.max(0).min(u8::MAX.into()) as u8;
+    let dest_g = g.max(0).min(u8::MAX.into()) as u8;
+    let dest_b = b.max(0).min(u8::MAX.into()) as u8;
 
     let rgb = Rgb([dest_r, dest_g, dest_b]);
 
@@ -236,8 +242,29 @@ fn nearest_color_from_palette(palette: &Vec<Rgb<u8>>, rgb: &Rgb<u8>) -> usize {
     best_index
 }
 
+fn diffuse_pixel_sierra_lite(error_vec: &mut Vec<Rgb<i16>>, r_error: i16, g_error: i16, b_error: i16, error_index: usize, next_row_error_index: usize) {
+    let next_row_error_index = next_row_error_index.max(0).min(error_vec.len() - 1);
+    let front_curr_row = (error_index + 1).max(0).min(error_vec.len() - 1);
+    let front_next_row = (next_row_error_index + 1).max(0).min(error_vec.len() - 1);
+
+    add_colors(&mut error_vec[front_curr_row], &Rgb::<i16>([r_error * 2 / 4, g_error * 2 / 4, b_error * 2 / 4]));
+    add_colors(&mut error_vec[front_next_row], &Rgb::<i16>([r_error / 4, g_error / 4, b_error / 4]));
+    add_colors(&mut error_vec[next_row_error_index], &Rgb::<i16>([r_error / 4, g_error / 4, b_error / 4]));
+}
+fn diffuse_pixel_floyd_steinberg(error_vec: &mut Vec<Rgb<i16>>, r_error: i16, g_error: i16, b_error: i16, error_index: usize, next_row_error_index: usize) {
+    let front_curr_row = (error_index + 1).max(0).min(error_vec.len() - 1);
+    let behind_next_row = (next_row_error_index - 1).max(0).min(error_vec.len() - 1);
+    let next_row_error_index = next_row_error_index.max(0).min(error_vec.len() - 1);
+    let front_next_row = (next_row_error_index + 1).max(0).min(error_vec.len() - 1);
+
+    add_colors(&mut error_vec[front_curr_row], &Rgb::<i16>([r_error * 7 / 16, g_error * 7 / 16, b_error * 7 / 16]));
+    add_colors(&mut error_vec[front_next_row], &Rgb::<i16>([r_error / 16, g_error / 16, b_error / 16]));
+    add_colors(&mut error_vec[next_row_error_index], &Rgb::<i16>([r_error * 5 / 16, g_error * 5 / 16, b_error * 5 / 16]));
+    add_colors(&mut error_vec[behind_next_row], &Rgb::<i16>([r_error * 3 / 16, g_error * 3 / 16, b_error * 3 / 16]));
+}
+
 // pre-allocated error_vec.
-fn diffuse_error(error_vec: &mut Vec<Rgb<i16>>, width: usize, x: usize, y: usize, src_color: &Rgb<u8>, corrected_color: &Rgb<u8>) {
+fn diffuse_error(error_vec: &mut Vec<Rgb<i16>>, width: usize, x: usize, y: usize, src_color: &Rgb<u8>, corrected_color: &Rgb<u8>, dither_mode: &DitherMode) {
     let [src_r, src_g, src_b] = src_color.0;
     let [corr_r, corr_g, corr_b] = corrected_color.0;
     let error_index = (width * y) + x;
@@ -247,16 +274,13 @@ fn diffuse_error(error_vec: &mut Vec<Rgb<i16>>, width: usize, x: usize, y: usize
     let g_error = src_g as i16 - corr_g as i16;
     let b_error = src_b as i16 - corr_b as i16;
 
-    // sierra lite.
-    if error_index + 1 <= error_vec.len() - 1 { // changed all x / 4
-        add_colors(&mut error_vec[error_index + 1], &Rgb::<i16>([r_error * 2 / 4, g_error * 2 / 4, b_error * 2 / 4]));
+    match dither_mode {
+        DitherMode::SierraLite => diffuse_pixel_sierra_lite(error_vec, r_error, g_error, b_error, error_index, next_row_error_index),
+        DitherMode::FloydSteinberg => diffuse_pixel_floyd_steinberg(error_vec, r_error, g_error, b_error, error_index, next_row_error_index),
+        DitherMode::Base => panic!("base!!"),
     }
-    if next_row_error_index + 1 <= error_vec.len() - 1 {
-        add_colors(&mut error_vec[next_row_error_index + 1], &Rgb::<i16>([r_error / 4, g_error / 4, b_error / 4]));
-    }
-    if next_row_error_index <= error_vec.len() - 1 {
-        add_colors(&mut error_vec[next_row_error_index], &Rgb::<i16>([r_error / 4, g_error / 4, b_error / 4]));
-    }
+
+    error_vec[error_index] = Rgb([0, 0, 0]);
 }
 
 fn octree_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut DynamicImage) {
@@ -273,7 +297,7 @@ fn octree_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicIm
     }
 }
 
-fn sierra_lite_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut DynamicImage) {
+fn quantize_dither_image(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut DynamicImage, dither_mode: &DitherMode) {
     let image_width = source.width() as usize;
     let mut error_vec = vec![Rgb::<i16>([0, 0, 0]); (source.width() * source.height()) as usize];
 
@@ -294,7 +318,7 @@ fn sierra_lite_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &Dyna
             let palette_color = palette[palette_index];
             // let palette_index = nearest_color_from_palette(palette, &corrected_rgb);
             // - diffuse error
-            diffuse_error(&mut error_vec, image_width, x as usize, y as usize, &corrected_rgb, &palette_color);
+            diffuse_error(&mut error_vec, image_width, x as usize, y as usize, &corrected_rgb, &palette_color, &dither_mode);
 
             destination.put_pixel(x as u32, y as u32, Rgba([palette_color.0[0], palette_color.0[1], palette_color.0[2], rgba.0[3]]));
         }
@@ -310,10 +334,6 @@ fn add_to_filename(path: &Path, addition: &str) -> PathBuf {
     parent.join(new_filename)
 }
 
-enum DitherMode {
-    Base,
-    SierraLite,
-}
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -327,9 +347,10 @@ fn main() {
             Arg::Short('d') | Arg::Long("dither") => {
                 let opt = opts.value();
                 match opt {
-                    Ok(s) => match s {
+                    Ok(s) => match s.to_lowercase().as_str() {
                         "base" => dither_mode = DitherMode::Base,
-                        "sierralite" => dither_mode = DitherMode::SierraLite,
+                        "sierralite" | "sl" => dither_mode = DitherMode::SierraLite,
+                        "floydsteinberg" | "fs" => dither_mode = DitherMode::FloydSteinberg,
                         _ => panic!(r#""{}" is not a valid option! [base, sierra]"#, s)
                     }
                     Err(e) => panic!("{}", e)
@@ -369,6 +390,7 @@ fn main() {
     let absolute_dest_path = path::absolute(dest_path).unwrap().into_os_string().into_string().unwrap();
 
     let img = image::open(absolute_source_path).expect("Can't find the file specified.");
+    println!("colortype: {:?}", img.color());
     let mut new_img = DynamicImage::new(img.width(), img.height(), img.color());
     let mut recursive_octree = Octree::new();
 
@@ -387,7 +409,7 @@ fn main() {
 
     match dither_mode {
         DitherMode::Base => octree_full_color(&recursive_octree, &palette, &img, &mut new_img),
-        DitherMode::SierraLite => sierra_lite_full_color(&recursive_octree, &palette, &img, &mut new_img),
+        DitherMode::SierraLite | DitherMode::FloydSteinberg => quantize_dither_image(&recursive_octree, &palette, &img, &mut new_img, &dither_mode),
     };
 
     let duration = start.elapsed();
@@ -395,7 +417,21 @@ fn main() {
     println!("Time per pixel: {:.6} ms", duration.as_secs_f64() / (new_img.width() * new_img.height()) as f64 * 1000.0);
     println!("Pixels: {}", new_img.width() * new_img.height());
 
-    if let Err(err) = new_img.save(absolute_dest_path) {
+    let dest_img = match img.color() {
+        ColorType::L8 => DynamicImage::ImageLuma8(new_img.to_luma8()),
+        ColorType::L16 => DynamicImage::ImageLuma16(new_img.to_luma16()),
+        ColorType::La8 => DynamicImage::ImageLumaA8(new_img.to_luma_alpha8()),
+        ColorType::La16 => DynamicImage::ImageLumaA16(new_img.to_luma_alpha16()),
+        ColorType::Rgb8 => DynamicImage::ImageRgb8(new_img.to_rgb8()),
+        ColorType::Rgb16 => DynamicImage::ImageRgb16(new_img.to_rgb16()),
+        ColorType::Rgb32F => DynamicImage::ImageRgb32F(new_img.to_rgb32f()),
+        ColorType::Rgba8 => DynamicImage::ImageRgba8(new_img.to_rgba8()),
+        ColorType::Rgba16 => DynamicImage::ImageRgba16(new_img.to_rgba16()),
+        ColorType::Rgba32F => DynamicImage::ImageRgba32F(new_img.to_rgba32f()),
+        _ => panic!("Unsupported color type!"),
+    };
+
+    if let Err(err) = dest_img.save(absolute_dest_path) {
         println!("Image Save Error: {}", err);
     }
 }

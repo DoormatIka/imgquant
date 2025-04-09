@@ -4,7 +4,7 @@ pub mod core;
 use core::octree::{add_colors, div_colors, mul_colors, Octree};
 use std::{cmp, env, fs::File, path::{self, Path, PathBuf}, time::{Duration, Instant}, u32, u8};
 use getargs::{Arg, Options};
-use image::{DynamicImage, GenericImage, GenericImageView, Pixel, Rgb, RgbImage, Rgba, RgbaImage};
+use image::{ColorType, DynamicImage, GenericImage, GenericImageView, ImageBuffer, Pixel, Rgb, RgbImage, Rgba, RgbaImage};
 
 fn bw_quant_basic_dithering(source: &DynamicImage, destination: &mut RgbaImage) {
     let mut color_error: i16 = 0;
@@ -204,9 +204,9 @@ fn dither_apply_error(err_color: &Rgb<i16>, color: &Rgb<u8>) -> Rgb<u8> {
     let [err_r, err_g, err_b] = err_color.0;
     let [src_r, src_g, src_b] = color.0.map(|c| i16::from(c));
 
-    let r = src_r + err_r;
-    let g = src_g + err_g;
-    let b = src_b + err_b;
+    let r = src_r + (err_r / 4);
+    let g = src_g + (err_g / 4);
+    let b = src_b + (err_b / 4);
 
     let dest_r = r.max(r).min(u8::MAX.into()) as u8;
     let dest_g = g.max(g).min(u8::MAX.into()) as u8;
@@ -217,6 +217,8 @@ fn dither_apply_error(err_color: &Rgb<i16>, color: &Rgb<u8>) -> Rgb<u8> {
     rgb
 }
 
+// expensive function to account for the octree not covering all colors!
+// dithering makes new colors out of nowhere due to errors + original color = new color
 fn nearest_color_from_palette(palette: &Vec<Rgb<u8>>, rgb: &Rgb<u8>) -> usize {
     let mut smallest_diff = u32::MAX;
     let mut best_index: usize = 0;
@@ -263,7 +265,7 @@ fn octree_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicIm
         for x in 0..width {
             let rgba = source.get_pixel(x, y);
             let rgb = rgba.to_rgb();
-            let palette_index = octree.get_palette_index(rgb).expect("Octree on dither palette_index couldn't find a color!");
+            let palette_index = octree.get_palette_index(rgb, true).expect("Octree on dither palette_index couldn't find a color!");
             let palette_color = palette[palette_index];
 
             destination.put_pixel(x as u32, y as u32, Rgba([palette_color.0[0], palette_color.0[1], palette_color.0[2], rgba.0[3]]));
@@ -285,10 +287,13 @@ fn sierra_lite_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &Dyna
             let dither_rgb = error_vec[error_index];
             let corrected_rgb = dither_apply_error(&dither_rgb, &rgb);
             // - get nearest color from palette
-            let palette_index = octree.get_palette_index(corrected_rgb).expect("Octree on dither palette_index couldn't find a color!");
+            let palette_index = match octree.get_palette_index(corrected_rgb, false) {
+                Some(index) => index,
+                None => nearest_color_from_palette(palette, &rgb)
+            };
+            let palette_color = palette[palette_index];
             // let palette_index = nearest_color_from_palette(palette, &corrected_rgb);
             // - diffuse error
-            let palette_color = palette[palette_index];
             diffuse_error(&mut error_vec, image_width, x as usize, y as usize, &corrected_rgb, &palette_color);
 
             destination.put_pixel(x as u32, y as u32, Rgba([palette_color.0[0], palette_color.0[1], palette_color.0[2], rgba.0[3]]));
@@ -364,8 +369,7 @@ fn main() {
     let absolute_dest_path = path::absolute(dest_path).unwrap().into_os_string().into_string().unwrap();
 
     let img = image::open(absolute_source_path).expect("Can't find the file specified.");
-    let new_img = RgbaImage::new(img.width(), img.height());
-    let mut new_img = DynamicImage::ImageRgba8(new_img);
+    let mut new_img = DynamicImage::new(img.width(), img.height(), img.color());
     let mut recursive_octree = Octree::new();
 
     let start = Instant::now();

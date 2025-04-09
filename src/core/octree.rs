@@ -73,8 +73,8 @@ pub struct OctreeNode {
 
 type LevelVec = [Vec<Weak<RefCell<OctreeNode>>>; MAX_DEPTH as usize];
 pub struct Octree {
-    pub root: OctreeNode,
-    pub levels: LevelVec,
+    root: OctreeNode,
+    levels: LevelVec,
 }
 
 impl Octree {
@@ -82,9 +82,9 @@ impl Octree {
         Self {
             root: OctreeNode::new(),
             levels: std::array::from_fn(|_| {
-                let mut a = Vec::new();
-                a.reserve(10_000);
-                a
+                let mut v = Vec::new();
+                v.reserve(10_000);
+                v
             }),
         }
     }
@@ -142,8 +142,18 @@ impl Octree {
     pub fn add_color(&mut self, color: Rgb<u8>) {
         self.root.add_color(color, 0, &mut self.levels);
     }
-    pub fn get_palette_index(&self, color: Rgb<u8>) -> Option<usize> {
-        self.root.get_palette_index(color, 0)
+    /// Returns the palette index for the closest color in the octree to your given color.
+    /// 
+    /// # Arguments
+    /// * `color` - The color value to find the palette index of.
+    /// * `ignore_no_color` - If `true`, the function will 
+    /// skip colors that are not accounted for in the octree.
+    ///
+    /// # Returns
+    /// * `Some(index)` if a suitable match is found.
+    /// * `None` if no match is found.
+    pub fn get_palette_index(&self, color: Rgb<u8>, ignore_no_color: bool) -> Option<usize> {
+        self.root.get_palette_index(color, 0, ignore_no_color)
     }
     pub fn get_leaf_nodes(&self) -> Vec<Weak<RefCell<OctreeNode>>> {
         let leaves = self.root.get_leaf_nodes();
@@ -185,7 +195,7 @@ impl OctreeNode {
         let mut node = self.children[index].as_ref().unwrap().borrow_mut();
         node.add_color(color, level + 1, levels);
     }
-    pub fn get_palette_index(&self, color: Rgb<u8>, level: usize) -> Option<usize> {
+    pub fn get_palette_index(&self, color: Rgb<u8>, level: usize, ignore_no_color: bool) -> Option<usize> {
         if self.is_leaf() {
             return Some(self.palette_index as usize);
         } else {
@@ -193,13 +203,15 @@ impl OctreeNode {
             match &self.children[index] {
                 Some(cell) => {
                     let c = cell.borrow();
-                    return c.get_palette_index(color, level + 1);
+                    return c.get_palette_index(color, level + 1, ignore_no_color);
                 },
                 None => {
-                    for node in self.children.iter() {
-                        if let Some(node) = node {
-                            let c = node.borrow();
-                            return c.get_palette_index(color, level + 1);
+                    if ignore_no_color {
+                        for node in self.children.iter() {
+                            if let Some(node) = node {
+                                let c = node.borrow();
+                                return c.get_palette_index(color, level + 1, ignore_no_color);
+                            }
                         }
                     }
 

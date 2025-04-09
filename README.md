@@ -8,8 +8,8 @@ Simple image quantizer.
 
 ### features
 - basic octree
-- sierra lite dithering
-- fairly fast (500ms~ on a 2304 x 1792 image)
+- sierra lite and floyd-steinberg dithering
+- fairly fast (80-200ms~ on a 2304 x 1792 image)
 
 ### plans
 - clean everything up!

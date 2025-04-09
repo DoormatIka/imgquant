@@ -106,6 +106,9 @@ impl Octree {
 
                     }
                 }
+                if leaf_count <= color_count {
+                    break;
+                }
             }
             if leaf_count <= color_count {
                 break;

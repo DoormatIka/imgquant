@@ -1,6 +1,6 @@
 
 # imgquant
-Simple image quantizer.
+Simple image quantizer. CPU-bound.
 
 `imgquant --input [file path] --color [color count] --dither [base, sierralite]`
 

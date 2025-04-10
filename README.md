@@ -17,4 +17,4 @@ Simple image quantizer.
 - octree node pruning on YUV errors instead of in-order RGB errors
 - 4x4 or 8x8 bayes' ordered dithering for gifs
 - flattened octree using morton order to avoid indirection for every node
-- parallelization of octrees based on ["Low-constant parallel algorithms for finite element simulations using linear octrees" by Hari Sundar, Rahul S. Sampath, Santi S. Adavani, Christos Davatzikos, George](https://dl.acm.org/doi/abs/10.1145/1362622.1362656)
+- parallelization of octrees (WHY ARE ALL THE PAPERS PAYWALLED??)

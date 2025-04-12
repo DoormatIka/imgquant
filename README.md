@@ -1,12 +1,13 @@
 
 # imgquant
-Simple image quantizer.
+Simple image quantizer. CPU-bound.
 
 `imgquant -h`
 
 ### features
 - basic octree
 - sierra lite and floyd-steinberg dithering
+<<<<<<< HEAD
 
 ### plans
 - clean everything up!
@@ -14,7 +15,8 @@ Simple image quantizer.
 - octree with imagemagick's error pruning with YUV
 - flattened octree using morton order to avoid indirection for every node.
 - option to turn off diffusion based dithering & switch to 4x4 or 8x8 bayes' ordered dithering
-
+- out of core implementation for massive images: [related issue](https://github.com/DoormatIka/imgquant/issues/1)
+- parallelization of octrees (WHY ARE ALL THE PAPERS PAYWALLED??)
 
 ### informal benchmarks
 all using floydsteinberg dithering.

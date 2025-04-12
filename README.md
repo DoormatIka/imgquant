@@ -7,7 +7,6 @@ Simple image quantizer. CPU-bound.
 ### features
 - basic octree
 - sierra lite and floyd-steinberg dithering
-<<<<<<< HEAD
 
 ### plans
 - clean everything up!

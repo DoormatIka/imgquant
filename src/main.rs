@@ -1,207 +1,17 @@
 
 pub mod core;
-
-use core::octree::{add_colors, div_colors, mul_colors, Octree};
-use std::{cmp, env, fs::File, io::BufReader, path::{self, Path, PathBuf}, time::{Duration, Instant}, u32, u8};
 use getargs::{Arg, Options};
-use image::{error, ColorType, DynamicImage, GenericImage, GenericImageView, ImageBuffer, Luma, Pixel, Rgb, RgbImage, Rgba, RgbaImage};
+use thiserror::Error;
+
+use core::rgb_helpers::{add_colors, color_diff};
+use core::accum_octree::LeafOctree;
+use std::{env, path::{self, Path, PathBuf}, time::Instant, u32, u8};
+use image::{ColorType, DynamicImage, GenericImage, GenericImageView, Pixel, Rgb, Rgba};
 
 enum DitherMode {
     Base,
     FloydSteinberg,
     SierraLite,
-}
-
-fn bw_quant_basic_dithering(source: &DynamicImage, destination: &mut RgbaImage) {
-    let mut color_error: i16 = 0;
-    let image_width = source.width();
-    for pixel in source.pixels() {
-        let x = pixel.0;
-        let y = pixel.1;
-        let rgba: [u8; 4] = pixel.2.0;
-        let grayscale = (f32::from(rgba[0]) * 0.2126 
-            + f32::from(rgba[1]) * 0.7152 
-            + f32::from(rgba[2]) * 0.0722)
-        .round()
-        .clamp(0.0, 255.0) as i16;
-        let corrected_grayscale = (grayscale + color_error).clamp(0, 255);
-        let bw_color: u8 = if corrected_grayscale <= 127 {
-            0
-        } else {
-            255
-        };
-        color_error = corrected_grayscale - i16::from(bw_color);
-
-        destination.put_pixel(x, y, Rgba([bw_color, bw_color, bw_color, rgba[3]]));
-
-        if x > image_width {
-            color_error = 0;
-        }
-    }
-}
-
-// cool as hell filter i stumbled into accidentally.
-fn bw_quant_line_filter(source: &DynamicImage, destination: &mut RgbImage) {
-    let mut color_error: i16 = 0;
-    let image_width = source.width();
-    
-    for (x, y, pixel) in source.pixels() {
-        let rgba: [u8; 4] = pixel.0;
-        let grayscale = (f32::from(rgba[0]) * 0.2126 
-            + f32::from(rgba[1]) * 0.7152 
-            + f32::from(rgba[2]) * 0.0722)
-        .round()
-        .clamp(0.0, 255.0) as i16;
-
-        let corrected_grayscale = grayscale - color_error;
-
-        let bw_color: u8 = if grayscale <= 127 + color_error {
-            0
-        } else {
-            255
-        };
-        color_error = (corrected_grayscale - i16::from(bw_color)).clamp(0, 255);
-
-        destination.put_pixel(x, y, Rgb([bw_color, bw_color, bw_color]));
-
-        if x > image_width {
-            color_error = 0;
-        }
-    }
-}
-
-
-fn bw_quant_floyd_seinberg_dither(source: &DynamicImage, destination: &mut RgbaImage) {
-    let image_width = source.width() as usize;
-
-    let mut current_errors = vec![0i16; image_width + 1];
-    let mut forward_errors = vec![0i16; image_width + 1];
-    // let mut current_errors: Vec<i16> = Vec::with_capacity(image_width as usize);
-    // let mut forward_errors: Vec<i16> = Vec::with_capacity(image_width as usize);
-
-    for pixel in source.pixels() {
-        let x = pixel.0 as usize;
-        let y = pixel.1 as usize;
-        let rgba: [u8; 4] = pixel.2.0;
-        let grayscale = (f32::from(rgba[0]) * 0.2126 
-            + f32::from(rgba[1]) * 0.7152 
-            + f32::from(rgba[2]) * 0.0722)
-        .round()
-        .clamp(0.0, 255.0) as i16;
-        let corrected_grayscale = (grayscale + current_errors[x as usize]).clamp(0, 255);
-        let bw_color: u8 = if corrected_grayscale <= 127 { 0 } else { 255 };
-
-        let color_error = corrected_grayscale - i16::from(bw_color);
-
-        // https://tannerhelland.com/2012/12/28/dithering-eleven-algorithms-source-code.html
-        // https://www.youtube.com/watch?v=ico4fJfohMQ
-        let forward_x = (x + 1).clamp(0, image_width) as usize;
-        let behind_x = if x <= 0 { 0 } else { (x - 1).clamp(0, image_width) as usize };
-        current_errors[forward_x] += color_error * 7 / 16;
-        forward_errors[behind_x] += color_error * 3 / 16;
-        forward_errors[x] += color_error * 5 / 16;
-        forward_errors[forward_x] += color_error / 16;
-        
-        destination.put_pixel(x as u32, y as u32, Rgba([bw_color, bw_color, bw_color, rgba[3]]));
-
-        if x >= image_width - 1 {
-            current_errors.clone_from_slice(&forward_errors);
-            forward_errors.fill(0);
-        }
-    }
-}
-
-fn bw_quant_sierra_lite_dither(source: &DynamicImage, destination: &mut RgbaImage) {
-    let image_width = source.width() as usize;
-
-    let mut current_errors = vec![0i16; image_width + 1];
-    let mut forward_errors = vec![0i16; image_width + 1];
-
-    for pixel in source.pixels() {
-        let x = pixel.0 as usize;
-        let y = pixel.1 as usize;
-        let rgba: [u8; 4] = pixel.2.0;
-        let grayscale = (f32::from(rgba[0]) * 0.2126 
-            + f32::from(rgba[1]) * 0.7152 
-            + f32::from(rgba[2]) * 0.0722)
-        .round()
-        .clamp(0.0, 255.0) as i16;
-        let corrected_grayscale = (grayscale + current_errors[x as usize]).clamp(0, 255);
-        let bw_color: u8 = if corrected_grayscale <= 127 { 0 } else { 255 };
-
-        let color_error = corrected_grayscale - i16::from(bw_color);
-
-        // https://tannerhelland.com/2012/12/28/dithering-eleven-algorithms-source-code.html
-        // https://www.youtube.com/watch?v=ico4fJfohMQ
-        let forward_x = (x + 1).clamp(0, image_width) as usize;
-        let behind_x = if x <= 0 { 0 } else { (x - 1).clamp(0, image_width) as usize };
-        current_errors[forward_x] += color_error * 2 / 4;
-        forward_errors[behind_x] += color_error / 4;
-        forward_errors[x] += color_error / 4;
-        
-        destination.put_pixel(x as u32, y as u32, Rgba([bw_color, bw_color, bw_color, rgba[3]]));
-
-        if x >= image_width - 1 {
-            current_errors.clone_from_slice(&forward_errors);
-            forward_errors.fill(0);
-        }
-    }
-}
-
-// black and white version!
-fn sierra_lite(source: &DynamicImage, destination: &mut RgbaImage) {
-    let image_width = source.width() as usize;
-
-    let mut current_errors = vec![0i16; image_width + 1];
-    let mut forward_errors = vec![0i16; image_width + 1];
-
-    for pixel in source.pixels() {
-        let x = pixel.0 as usize;
-        let y = pixel.1 as usize;
-        let rgba: [u8; 4] = pixel.2.0;
-        let grayscale = (f32::from(rgba[0]) * 0.2126 
-            + f32::from(rgba[1]) * 0.7152 
-            + f32::from(rgba[2]) * 0.0722)
-        .round()
-        .clamp(0.0, 255.0) as i16;
-
-        // corrected grayscale will probably be adding the rgb values then averaging them (TODO)
-        let corrected_grayscale = (grayscale + current_errors[x as usize]).clamp(0, 255);
-        // pushing them back into the octree to get another value (TODO)
-        let bw_color: u8 = if corrected_grayscale <= 127 { 0 } else { 255 };
-
-        // representing the error as an Rgb<u64> (TODO)
-        let color_error = corrected_grayscale - i16::from(bw_color);
-
-        // https://tannerhelland.com/2012/12/28/dithering-eleven-algorithms-source-code.html
-        // https://www.youtube.com/watch?v=ico4fJfohMQ
-        let forward_x = (x + 1).clamp(0, image_width) as usize;
-        let behind_x = if x <= 0 { 0 } else { (x - 1).clamp(0, image_width) as usize };
-        current_errors[forward_x] += color_error * 2 / 4;
-        forward_errors[behind_x] += color_error / 4;
-        forward_errors[x] += color_error / 4;
-        
-        destination.put_pixel(x as u32, y as u32, Rgba([bw_color, bw_color, bw_color, rgba[3]]));
-
-        if x >= image_width - 1 {
-            current_errors.clone_from_slice(&forward_errors);
-            forward_errors.fill(0);
-        }
-    }
-}
-
-// full color.
-pub fn color_diff<L, R>(lhs: &Rgb<L>, rhs: &Rgb<R>) -> u32 
-where 
-    L: Copy,
-    R: Copy,
-    i32: From<L> + From<R>,
-{
-    let delta_r = i32::from(lhs.0[0]) - i32::from(rhs.0[0]);
-    let delta_g = i32::from(lhs.0[1]) - i32::from(rhs.0[1]);
-    let delta_b = i32::from(lhs.0[2]) - i32::from(rhs.0[2]);
-
-    (3 * delta_r * delta_r + 6 * delta_g * delta_g + delta_b * delta_b) as u32
 }
 
 // low hanging optimizations: 
@@ -283,13 +93,13 @@ fn diffuse_error(error_vec: &mut Vec<Rgb<i16>>, width: usize, x: usize, y: usize
     error_vec[error_index] = Rgb([0, 0, 0]);
 }
 
-fn octree_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut DynamicImage) {
+fn base_quantize(octree: &LeafOctree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut DynamicImage) {
     let (width, height) = source.dimensions();
     for y in 0..height {
         for x in 0..width {
             let rgba = source.get_pixel(x, y);
             let rgb = rgba.to_rgb();
-            let palette_index = octree.get_palette_index(rgb, true).expect("Octree on dither palette_index couldn't find a color!");
+            let palette_index = octree.get_palette_index(rgb, true).expect("LeafOctree on dither palette_index couldn't find a color!");
             let palette_color = palette[palette_index];
 
             destination.put_pixel(x as u32, y as u32, Rgba([palette_color.0[0], palette_color.0[1], palette_color.0[2], rgba.0[3]]));
@@ -297,7 +107,7 @@ fn octree_full_color(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicIm
     }
 }
 
-fn quantize_dither_image(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut DynamicImage, dither_mode: &DitherMode) {
+fn quantize_dither_image(octree: &LeafOctree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut DynamicImage, dither_mode: &DitherMode) {
     let image_width = source.width() as usize;
     let mut error_vec = vec![Rgb::<i16>([0, 0, 0]); (source.width() * source.height()) as usize];
 
@@ -311,9 +121,9 @@ fn quantize_dither_image(octree: &Octree, palette: &Vec<Rgb<u8>>, source: &Dynam
             let dither_rgb = error_vec[error_index];
             let corrected_rgb = dither_apply_error(&dither_rgb, &rgb);
             // - get nearest color from palette
-            let palette_index = match octree.get_palette_index(corrected_rgb, false) {
+            let palette_index = match octree.get_palette_index(corrected_rgb, true) {
                 Some(index) => index,
-                None => nearest_color_from_palette(palette, &rgb)
+                None => nearest_color_from_palette(palette, &rgb),
             };
             let palette_color = palette[palette_index];
             // let palette_index = nearest_color_from_palette(palette, &corrected_rgb);
@@ -334,34 +144,80 @@ fn add_to_filename(path: &Path, addition: &str) -> PathBuf {
     parent.join(new_filename)
 }
 
+struct ParsedOptions {
+    source_path: Box<Path>,
+    color_size: i32,
+    dither_mode: DitherMode,
+    depth: usize,
+}
 
-fn main() {
+#[derive(Error, Debug)]
+enum ParseErrors {
+    #[error(r#"Early return for help."#)]
+    Help,
+    #[error(r#"Unknown option: {0}"#)]
+    UnknownOption(String),
+    #[error(r#"An argument for "{0}" is missing."#)]
+    MissingArgument(String),
+    #[error(r#"Invalid argument: {0}"#)]
+    InvalidArgument(String),
+}
+
+fn parse_cli() -> Result<ParsedOptions, ParseErrors> {
     let args: Vec<String> = env::args().skip(1).collect();
     let mut opts = Options::new(args.iter().map(String::as_str));
-    let mut source_path: Option<&Path> = None;
-    let mut color_size: Option<i32> = Some(256);
-    let mut dither_mode = DitherMode::SierraLite;
+    let mut source_path: Option<Box<Path>> = None;
+    let mut color_size = 256;
+    let mut dither_mode = DitherMode::FloydSteinberg;
+    let mut depth: usize = 6;
+    let mut option_count = 0;
 
     while let Some(arg) = opts.next_arg().expect("Parsing error.") {
         match arg {
-            Arg::Short('d') | Arg::Long("dither") => {
+            Arg::Short('h') | Arg::Long("help") => {
+                return Err(ParseErrors::Help);
+            },
+            Arg::Long("dither") => {
                 let opt = opts.value();
                 match opt {
                     Ok(s) => match s.to_lowercase().as_str() {
                         "base" => dither_mode = DitherMode::Base,
                         "sierralite" | "sl" => dither_mode = DitherMode::SierraLite,
                         "floydsteinberg" | "fs" => dither_mode = DitherMode::FloydSteinberg,
-                        _ => panic!(r#""{}" is not a valid option! [base, sierra]"#, s)
+                        _ => return Err(ParseErrors::InvalidArgument(format!("{} is not a valid dither mode. Options: base, sierralite, floydsteinberg", s))),
                     }
-                    Err(e) => panic!("{}", e)
+                    Err(_) => return Err(ParseErrors::MissingArgument("dither".to_string()))
                 };
             }
             Arg::Short('i') | Arg::Long("input") => {
                 let opt = opts.value();
                 match opt {
-                    Ok(s) => source_path.replace(Path::new(s)),
-                    Err(e) => panic!("{}", e)
-                };
+                    Ok(s) => {
+                        let buf = PathBuf::from(s).into_boxed_path();
+                        source_path.replace(buf);
+                    },
+                    Err(_) => return Err(ParseErrors::MissingArgument("input".to_string()))
+                }
+            }
+            Arg::Short('d') | Arg::Long("depth") => { // unreachable.
+                let opt = opts.value();
+                match opt {
+                    Ok(s) => {
+                        let res = s.parse::<usize>();
+                        match res {
+                            Ok(d) => {
+                                println!("{}", d);
+                                if d <= 8 && d > 2 {
+                                    depth = d;
+                                } else {
+                                    return Err(ParseErrors::InvalidArgument("Depth must be more than 2 and less than or equal to 8.".to_string()))
+                                }
+                            },
+                            Err(_) => return Err(ParseErrors::InvalidArgument("Depth is not a number.".to_string())),
+                        };
+                    }
+                    Err(_) => return Err(ParseErrors::MissingArgument("depth".to_string()))
+                }
             }
             Arg::Short('c') | Arg::Long("color") => {
                 let opt = opts.value();
@@ -371,28 +227,47 @@ fn main() {
                         match res {
                             Ok(res) =>
                                 if res >= 2 {
-                                    color_size.replace(res);
+                                    color_size = res;
                                 } else {
-                                    panic!("Color is below 2!");
+                                    return Err(ParseErrors::InvalidArgument(format!("Color size {} is below 2.", color_size)))
                                 }
-                            Err(_) => panic!("Color is not a number!"),
+                            Err(_) => return Err(ParseErrors::InvalidArgument("Color size is not a number.".to_string())),
                         };
                     }
-                    Err(e) => panic!("{}", e)
+                    Err(_) => return Err(ParseErrors::MissingArgument("color".to_string()))
                 };
             }
-            Arg::Positional(_) | Arg::Short(_) | Arg::Long(_) => {}
+            Arg::Positional(l) | Arg::Long(l) => return Err(ParseErrors::UnknownOption(l.to_string())),
+            Arg::Short(s) => return Err(ParseErrors::UnknownOption(s.to_string())),
         }
+        option_count += 1;
+    };
+
+    if option_count <= 0 {
+        return Err(ParseErrors::Help);
     }
-    let source_path = source_path.expect("Set your input man.");
-    let dest_path = add_to_filename(source_path, "_quant_dither");
+
+    if let Some(source_path) = source_path {
+        Ok(ParsedOptions { source_path, color_size, dither_mode, depth })
+    } else {
+        Err(ParseErrors::MissingArgument("source path".to_string()))
+    }
+}
+
+fn run_quantization_pipeline(opts: ParsedOptions) {
+    let ParsedOptions { source_path, color_size, dither_mode, depth } = opts;
+
+    let dest_path = add_to_filename(&source_path, "_quant_dither");
     let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
     let absolute_dest_path = path::absolute(dest_path).unwrap().into_os_string().into_string().unwrap();
 
-    let img = image::open(absolute_source_path).expect("Can't find the file specified.");
+    let img = match image::open(absolute_source_path) {
+        Ok(img) => img,
+        Err(err) => return println!("FileError: {}", err),
+    };
     println!("colortype: {:?}", img.color());
     let mut new_img = DynamicImage::new(img.width(), img.height(), img.color());
-    let mut recursive_octree = Octree::new();
+    let mut recursive_octree = LeafOctree::new(depth);
 
     let start = Instant::now();
     for (_, _, rgba) in img.pixels() {
@@ -402,16 +277,14 @@ fn main() {
     println!("\nseconds to initialize: {:?}", Instant::now() - start);
     println!("Tree leaves count before quantization: {} color/s", recursive_octree.get_leaf_nodes().len());
 
-    let palette = recursive_octree.make_palette(color_size.expect("Set the color size."));
+    let palette = recursive_octree.make_palette(color_size);
     println!("Tree leaves count after quantization: {} color/s", recursive_octree.get_leaf_nodes().len());
 
     let start = Instant::now();
-
     match dither_mode {
-        DitherMode::Base => octree_full_color(&recursive_octree, &palette, &img, &mut new_img),
+        DitherMode::Base => base_quantize(&recursive_octree, &palette, &img, &mut new_img),
         DitherMode::SierraLite | DitherMode::FloydSteinberg => quantize_dither_image(&recursive_octree, &palette, &img, &mut new_img, &dither_mode),
     };
-
     let duration = start.elapsed();
     println!("Image quantization took: {:?}", duration);
     println!("Time per pixel: {:.6} ms", duration.as_secs_f64() / (new_img.width() * new_img.height()) as f64 * 1000.0);
@@ -428,11 +301,35 @@ fn main() {
         ColorType::Rgba8 => DynamicImage::ImageRgba8(new_img.to_rgba8()),
         ColorType::Rgba16 => DynamicImage::ImageRgba16(new_img.to_rgba16()),
         ColorType::Rgba32F => DynamicImage::ImageRgba32F(new_img.to_rgba32f()),
-        _ => panic!("Unsupported color type!"),
+        _ => return println!("Unsupported color type!"),
     };
 
     if let Err(err) = dest_img.save(absolute_dest_path) {
         println!("Image Save Error: {}", err);
+    }
+}
+
+fn main() {
+    let parsed_options = parse_cli();
+    match parsed_options {
+        Ok(opts) => run_quantization_pipeline(opts),
+        Err(err) => match err {
+            ParseErrors::Help => {
+                println!(
+                    r#"Usage: imgquant [-h] [-vvvv]
+    A fast simple image quantizer.
+
+    Options:
+        -h, --help     help
+        -i, --input    file to quantize
+        -d, --depth    octree depth (2 to 8)
+        -c, --color    number of colors in the octree.
+        --dither       modes for dithering [base, sierralite, floydsteinberg]
+                    "#
+                    );
+            },
+            err => println!("{}", err),
+        }
     }
 }
 

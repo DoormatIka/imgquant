@@ -6,12 +6,12 @@ use image::Rgb;
 // note: 0, 1, 2 corresponds to R, G, B
 
 pub fn get_color_index(color: Rgb<u8>, level: usize) -> usize {
-    // convert to YUV here for better representation?
+    let [r, g, b] = color.0;
     let mut index: usize = 0;
     let mask = 0b10000000 >> level;
-    if color.0[0] & mask != 0 { index |= 0b100; }
-    if color.0[1] & mask != 0 { index |= 0b010; }
-    if color.0[2] & mask != 0 { index |= 0b001; }
+    if r & mask != 0 { index |= 0b100; }
+    if g & mask != 0 { index |= 0b010; }
+    if b & mask != 0 { index |= 0b001; }
 
     return index;
 }
@@ -24,7 +24,6 @@ pub struct OctreeNode {
     palette_index: u32,
 }
 
-// type LevelVec = [Vec<Weak<RefCell<OctreeNode>>>; MAX_DEPTH as usize];
 type LevelVec = Vec<Vec<Weak<RefCell<OctreeNode>>>>;
 pub struct LeafOctree {
     depth: usize,

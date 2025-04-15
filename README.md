@@ -6,14 +6,13 @@ Simple image quantizer. CPU-bound.
 
 ### features
 - basic octree
-- sierra lite and floyd-steinberg dithering
+- base, sierra lite, and floyd-steinberg dithering
 
 ### plans
 - clean everything up!
-- switch out String with OsString for cli.
-- octree with imagemagick's error pruning with YUV
 - flattened octree using morton order to avoid indirection for every node.
-- option to turn off diffusion based dithering & switch to 4x4 or 8x8 bayes' ordered dithering
+- octree with imagemagick's error pruning with YUV
+- dithering: 4x4 8x8 Bayer's matrix
 - out of core implementation for massive images: [related issue](https://github.com/DoormatIka/imgquant/issues/1)
 - parallelization of octrees (WHY ARE ALL THE PAPERS PAYWALLED??)
 

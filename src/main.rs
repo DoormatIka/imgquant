@@ -1,12 +1,14 @@
 
 pub mod core;
+pub mod morton;
+
+use image::{ColorType, DynamicImage, GenericImage, GenericImageView, Pixel, Rgb, Rgba};
+use std::{env, path::{self, Path, PathBuf}, time::Instant, u32, u8};
 use getargs::{Arg, Options};
 use thiserror::Error;
 
 use core::rgb_helpers::{add_colors, color_diff};
 use core::accum_octree::LeafOctree;
-use std::{env, path::{self, Path, PathBuf}, time::Instant, u32, u8};
-use image::{ColorType, DynamicImage, GenericImage, GenericImageView, Pixel, Rgb, Rgba};
 
 enum DitherMode {
     Base,
@@ -144,6 +146,21 @@ fn add_to_filename(path: &Path, addition: &str) -> PathBuf {
     parent.join(new_filename)
 }
 
+
+fn print_palette(palette: &Vec<Rgb<u8>>) {
+    print!("Palette: ");
+    for rgb in palette.iter() {
+        print_color_box(rgb);
+        print!("\x1B[0m");
+    }
+    println!("\x1B[0m");
+}
+
+fn print_color_box(rgb: &Rgb<u8>) {
+    let [r, g, b] = rgb.0;
+    print!("\x1B[48;2;{};{};{}m ", r, g, b);
+}
+
 struct ParsedOptions {
     source_path: Box<Path>,
     color_size: i32,
@@ -207,10 +224,10 @@ fn parse_cli() -> Result<ParsedOptions, ParseErrors> {
                         match res {
                             Ok(d) => {
                                 println!("{}", d);
-                                if d <= 8 && d > 2 {
+                                if d <= 10 && d > 2 {
                                     depth = d;
                                 } else {
-                                    return Err(ParseErrors::InvalidArgument("Depth must be more than 2 and less than or equal to 8.".to_string()))
+                                    return Err(ParseErrors::InvalidArgument("Depth must be more than 2 and less than or equal to 10.".to_string()))
                                 }
                             },
                             Err(_) => return Err(ParseErrors::InvalidArgument("Depth is not a number.".to_string())),
@@ -258,15 +275,22 @@ fn run_quantization_pipeline(opts: ParsedOptions) {
     let ParsedOptions { source_path, color_size, dither_mode, depth } = opts;
 
     let dest_path = add_to_filename(&source_path, "_quant_dither");
-    let absolute_source_path = path::absolute(source_path).unwrap().into_os_string().into_string().unwrap();
-    let absolute_dest_path = path::absolute(dest_path).unwrap().into_os_string().into_string().unwrap();
+    let absolute_source_path = path::absolute(&source_path).unwrap().into_os_string().into_string().unwrap();
+    let absolute_dest_path = path::absolute(&dest_path).unwrap().into_os_string().into_string().unwrap();
 
     let img = match image::open(absolute_source_path) {
         Ok(img) => img,
         Err(err) => return println!("FileError: {}", err),
     };
-    println!("colortype: {:?}", img.color());
-    let mut new_img = DynamicImage::new(img.width(), img.height(), img.color());
+    let file_name = source_path.file_name().unwrap().to_str().unwrap();
+    let (image_width, image_height) = img.dimensions();
+    let image_color = img.color();
+    print!(r#"
+filename: {}
+width, height: ({}, {})
+color type: {:?}, bits per pixel: {}, channel count: {}
+    "#, file_name, image_width, image_height, image_color, image_color.bits_per_pixel(), image_color.channel_count());
+    let mut new_img = DynamicImage::new(image_width, image_height, image_color);
     let mut recursive_octree = LeafOctree::new(depth);
 
     let start = Instant::now();
@@ -275,10 +299,12 @@ fn run_quantization_pipeline(opts: ParsedOptions) {
     }
 
     println!("\nseconds to initialize: {:?}", Instant::now() - start);
-    println!("Tree leaves count before quantization: {} color/s", recursive_octree.get_leaf_nodes().len());
+    println!("tree leaves count before quantization: {} color/s", recursive_octree.get_leaf_nodes().len());
 
     let palette = recursive_octree.make_palette(color_size);
-    println!("Tree leaves count after quantization: {} color/s", recursive_octree.get_leaf_nodes().len());
+    println!("tree leaves count after quantization: {} color/s", recursive_octree.get_leaf_nodes().len());
+
+    print_palette(&palette);
 
     let start = Instant::now();
     match dither_mode {
@@ -286,11 +312,11 @@ fn run_quantization_pipeline(opts: ParsedOptions) {
         DitherMode::SierraLite | DitherMode::FloydSteinberg => quantize_dither_image(&recursive_octree, &palette, &img, &mut new_img, &dither_mode),
     };
     let duration = start.elapsed();
-    println!("Image quantization took: {:?}", duration);
-    println!("Time per pixel: {:.6} ms", duration.as_secs_f64() / (new_img.width() * new_img.height()) as f64 * 1000.0);
-    println!("Pixels: {}", new_img.width() * new_img.height());
+    println!("image quantization took: {:?}", duration);
+    println!("time per pixel: {:.6} ms", duration.as_secs_f64() / (new_img.width() * new_img.height()) as f64 * 1000.0);
+    println!("pixels: {}", new_img.width() * new_img.height());
 
-    let dest_img = match img.color() {
+    let dest_img = match image_color {
         ColorType::L8 => DynamicImage::ImageLuma8(new_img.to_luma8()),
         ColorType::L16 => DynamicImage::ImageLuma16(new_img.to_luma16()),
         ColorType::La8 => DynamicImage::ImageLumaA8(new_img.to_luma_alpha8()),

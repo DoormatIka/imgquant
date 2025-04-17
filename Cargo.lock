@@ -327,6 +327,7 @@ version = "0.1.0"
 dependencies = [
  "getargs",
  "image",
+ "num-traits",
  "thiserror 2.0.12",
 ]
 

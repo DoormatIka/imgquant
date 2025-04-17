@@ -1,15 +1,38 @@
 
-use std::{ops::{Add, AddAssign, Div, Mul, Sub}, u8};
+use std::{ops::{Add, AddAssign, Div, Mul, Sub}, process::Output, u8};
 use image::Rgb;
+use num_traits::{Bounded, Num, NumCast, ToPrimitive};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct IRgb<T> {
     inner: Rgb::<T>
 }
 
+pub trait Convert<To>
+where 
+    To: Clone + Copy + Num
+{
+    fn lower_convert(self) -> Option<IRgb<To>>;
+}
+impl<Fr, To> Convert<To> for IRgb<Fr>
+where
+    To: Clone + Copy + From<Fr> + Num + NumCast + ToPrimitive + PartialOrd,
+    Fr: Clone + Copy + Num + NumCast + ToPrimitive + Bounded,
+{
+    /// Converts the internal values from a higher to lower bit representation.
+    fn lower_convert(self) -> Option<IRgb<To>> {
+        let [r, g, b] = self.inner.0;
+        Some(IRgb::from_array([
+            NumCast::from(r)?,
+            NumCast::from(g)?,
+            NumCast::from(b)?,
+        ]))
+    }
+}
+
 impl<T> IRgb<T> 
 where 
-    T: Copy + Add,
+    T: Copy,
 {
     pub fn new(rgb: Rgb<T>) -> Self {
         IRgb { inner: rgb }
@@ -23,32 +46,22 @@ where
     pub fn color_diff<R>(&self, rgb: &IRgb<R>) -> u32
     where
         R: Copy,
-        i32: From<T> + From<R>
+        i32: From<T> + From<R>,
     {
         let [sr, sg, sb] = self.inner.0;
         let [r, g, b] = rgb.inner.0;
-        let delta_r = i32::from(sr) - i32::from(r);
-        let delta_g = i32::from(sg) - i32::from(g);
-        let delta_b = i32::from(sb) - i32::from(b);
+        let delta_r = <i32 as From<T>>::from(sr) - <i32 as From<R>>::from(r);
+        let delta_g = <i32 as From<T>>::from(sg) - <i32 as From<R>>::from(g);
+        let delta_b = <i32 as From<T>>::from(sb) - <i32 as From<R>>::from(b);
 
         (3 * delta_r * delta_r + 6 * delta_g * delta_g + delta_b * delta_b) as u32
     }
 }
 
-// plan: let rgb = IRgb::<u32>::from(IRgb::<u8>::new())
-impl<Fr, To> From<IRgb<Fr>> for IRgb<To>
+impl<T> AddAssign for IRgb<T>
 where 
-    To: From<Fr>,
-    Fr: Copy,
+    T: AddAssign
 {
-    fn from(value: IRgb<Fr>) -> Self {
-        let [r, g, b] = value.inner.0;
-        IRgb { inner: Rgb([To::from(r), To::from(g), To::from(b)]) }
-    }
-}
-
-
-impl<T: AddAssign> AddAssign for IRgb<T> {
     fn add_assign(&mut self, rhs: Self) {
         let [sr, sg, sb] = &mut self.inner.0;
         let [r, g, b] = rhs.inner.0;
@@ -58,62 +71,126 @@ impl<T: AddAssign> AddAssign for IRgb<T> {
     }
 }
 
-impl<T: Add<Output = T>> Add for IRgb<T> {
+impl<T> AddAssign<T> for IRgb<T> 
+where 
+    T: Copy + Num + AddAssign<T>,
+{
+    fn add_assign(&mut self, rhs: T) {
+        let [sr, sg, sb] = &mut self.inner.0;
+        *sr += rhs;
+        *sg += rhs;
+        *sb += rhs;
+    }
+}
+
+impl<T> Add for IRgb<T>
+where 
+    T: Add<Output = T>
+{
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
         let [sr, sg, sb] = self.inner.0;
         let [r, g, b] = rhs.inner.0;
         IRgb {
-            inner: Rgb::<T>([
-                sr + r,
-                sg + g,
-                sb + b,
-            ]),
+            inner: Rgb::<T>([sr + r, sg + g, sb + b]),
         }
     }
 }
 
-impl<T: Sub<Output = T>> Sub for IRgb<T> {
+impl<T> Add<T> for IRgb<T>
+where
+    T: Copy + Num,
+{
+    type Output = Self;
+
+    fn add(self, rhs: T) -> Self::Output {
+        let [r, g, b] = self.inner.0;
+        IRgb {
+            inner: Rgb([r + rhs, g + rhs, b + rhs]),
+        }
+    }
+}
+
+impl<T> Sub for IRgb<T>
+where 
+    T: Sub<Output = T>
+{
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
         let [sr, sg, sb] = self.inner.0;
         let [r, g, b] = rhs.inner.0;
         IRgb {
-            inner: Rgb::<T>([
-                sr - r,
-                sg - g,
-                sb - b,
-            ]),
+            inner: Rgb::<T>([sr - r, sg - g, sb - b]),
         }
     }
 }
 
-impl<T: Mul<Output = T>> Mul for IRgb<T> {
+impl<T> Sub<T> for IRgb<T>
+where
+    T: Copy + Num,
+{
+    type Output = Self;
+
+    fn sub(self, rhs: T) -> Self::Output {
+        let [r, g, b] = self.inner.0;
+        IRgb {
+            inner: Rgb([r - rhs, g - rhs, b - rhs]),
+        }
+    }
+}
+
+impl<T> Mul for IRgb<T>
+where 
+    T: Mul<Output = T>
+{
     type Output = Self;
     fn mul(self, rhs: Self) -> Self::Output {
         let [sr, sg, sb] = self.inner.0;
         let [r, g, b] = rhs.inner.0;
         IRgb {
-            inner: Rgb::<T>([
-                sr * r,
-                sg * g,
-                sb * b,
-            ]),
+            inner: Rgb::<T>([sr * r, sg * g, sb * b]),
         }
     }
 }
 
-impl<T: Div<Output = T>> Div for IRgb<T> {
+impl<T> Mul<T> for IRgb<T>
+where
+    T: Copy + Num,
+{
+    type Output = Self;
+
+    fn mul(self, rhs: T) -> Self::Output {
+        let [r, g, b] = self.inner.0;
+        IRgb {
+            inner: Rgb([r - rhs, g - rhs, b - rhs]),
+        }
+    }
+}
+
+impl<T> Div for IRgb<T>
+where 
+    T: Div<Output = T>
+{
     type Output = Self;
     fn div(self, rhs: Self) -> Self::Output {
         let [sr, sg, sb] = self.inner.0;
         let [r, g, b] = rhs.inner.0;
         IRgb {
-            inner: Rgb::<T>([
-                sr / r,
-                sg / g,
-                sb / b,
-            ]),
+            inner: Rgb::<T>([sr / r, sg / g, sb / b]),
+        }
+    }
+}
+
+impl<T> Div<T> for IRgb<T>
+where
+    T: Copy + Num,
+{
+    type Output = Self;
+
+    fn div(self, rhs: T) -> Self::Output {
+        let [r, g, b] = self.inner.0;
+        IRgb {
+            inner: Rgb([r / rhs, g / rhs, b / rhs]),
         }
     }
 }

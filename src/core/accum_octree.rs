@@ -1,7 +1,7 @@
 
 use core::fmt;
 use crate::core::rgb_helpers::add_colors;
-use std::{cell::RefCell, rc::{Rc, Weak}};
+use std::{cell::RefCell, cmp::Ordering, rc::{Rc, Weak}};
 use image::Rgb;
 // note: 0, 1, 2 corresponds to R, G, B
 

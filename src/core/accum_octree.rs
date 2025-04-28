@@ -1,12 +1,12 @@
 
 use core::fmt;
-use crate::core::rgb_helpers::add_colors;
+use crate::core::rgb_helpers::{add_colors, IRgb};
 use std::{cell::RefCell, cmp::Ordering, rc::{Rc, Weak}};
 use image::Rgb;
 // note: 0, 1, 2 corresponds to R, G, B
 
-pub fn get_color_index(color: Rgb<u8>, level: usize) -> usize {
-    let [r, g, b] = color.0;
+pub fn get_color_index(color: IRgb<u8>, level: usize) -> usize {
+    let [r, g, b] = color.get_inner().0;
     let mut index: usize = 0;
     let mask = 0b10000000 >> level;
     if r & mask != 0 { index |= 0b100; }
@@ -19,7 +19,7 @@ pub fn get_color_index(color: Rgb<u8>, level: usize) -> usize {
 #[derive(Clone, Debug)]
 pub struct OctreeNode {
     children: [Option<Rc<RefCell<OctreeNode>>>; 8],
-    color: Rgb<u32>,
+    color: IRgb<u32>,
     pixel_count: u32,
     palette_index: u32,
 }
@@ -42,8 +42,8 @@ impl LeafOctree {
         }
     }
 
-    pub fn make_palette(&mut self, color_count: i32) -> Vec<Rgb<u8>> {
-        let mut palette = Vec::<Rgb<u8>>::new();
+    pub fn make_palette(&mut self, color_count: i32) -> Vec<IRgb<u8>> {
+        let mut palette = Vec::<IRgb<u8>>::new();
         let mut palette_index = 0;
         let leaves = self.get_leaf_nodes();
         let mut leaf_count = leaves.len() as i32;
@@ -76,13 +76,15 @@ impl LeafOctree {
             if let Some(node) = node.upgrade() {
                 let mut borrowed_node = node.borrow_mut();
                 if borrowed_node.is_leaf() {
-                    let [r, g, b] = borrowed_node.color.0;
-                    let rgb = Rgb::<u8>([
-                        (r / borrowed_node.pixel_count) as u8,
-                        (g / borrowed_node.pixel_count) as u8,
-                        (b / borrowed_node.pixel_count) as u8,
-                    ]);
-                    palette.push(rgb);
+                    let color = borrowed_node.color / borrowed_node.pixel_count;
+                    // todo: conversion! 
+                    // generalize conversion from: 
+                    //     u64 to u8
+                    //     i32 to u8
+                    //     i64 to u32
+                    //
+                    // or just have methods to convert them bleh.
+                    palette.push(Convert::<u8>::lower_convert(color).expect("Couldn't convert u32 to u8."));
                 }
                 borrowed_node.palette_index = palette_index as u32;
                 palette_index += 1;
@@ -92,7 +94,7 @@ impl LeafOctree {
         palette
     }
 
-    pub fn add_color(&mut self, color: Rgb<u8>) {
+    pub fn add_color(&mut self, color: IRgb<u8>) {
         self.root.add_color(color, 0, &mut self.levels, self.depth);
     }
     /// Returns the palette index for the closest color in the octree to your given color.
@@ -105,7 +107,7 @@ impl LeafOctree {
     /// # Returns
     /// * `Some(index)` if a suitable match is found.
     /// * `None` if no match is found.
-    pub fn get_palette_index(&self, color: Rgb<u8>, force_find_color: bool) -> Option<usize> {
+    pub fn get_palette_index(&self, color: IRgb<u8>, force_find_color: bool) -> Option<usize> {
         self.root.get_palette_index(color, 0, force_find_color)
     }
     pub fn get_leaf_nodes(&self) -> Vec<Weak<RefCell<OctreeNode>>> {
@@ -125,15 +127,15 @@ impl fmt::Display for LeafOctree {
 impl OctreeNode {
     pub fn new() -> Self {
         Self {
-            color: Rgb([0, 0, 0]),
+            color: IRgb::from_array([0, 0, 0]),
             pixel_count: 0,
             palette_index: 0,
             children: std::array::from_fn(|_| None),
         }
     }
-    pub fn add_color(&mut self, color: Rgb<u8>, level: usize, levels: &mut LevelVec, depth: usize) {
+    pub fn add_color(&mut self, color: IRgb<u8>, level: usize, levels: &mut LevelVec, depth: usize) {
         if level >= depth {
-            add_colors(&mut self.color, &color);
+            self.color += color.lower_convert().unwrap();
             self.pixel_count += 1;
             return;
         }
@@ -147,7 +149,7 @@ impl OctreeNode {
         let mut node = self.children[index].as_ref().unwrap().borrow_mut();
         node.add_color(color, level + 1, levels, depth);
     }
-    pub fn get_palette_index(&self, color: Rgb<u8>, level: usize, force_find_color: bool) -> Option<usize> {
+    pub fn get_palette_index(&self, color: IRgb<u8>, level: usize, force_find_color: bool) -> Option<usize> {
         if self.is_leaf() {
             return Some(self.palette_index as usize);
         } else {
@@ -198,7 +200,7 @@ impl OctreeNode {
                     leaves_removed += 1;
                 }
                 self.pixel_count += borrowed_child.pixel_count;
-                add_colors(&mut self.color, &borrowed_child.color);
+                self.color += borrowed_child.color;
             }
             *child = None;
         }

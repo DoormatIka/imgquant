@@ -1,13 +1,12 @@
 
 pub mod core;
-pub mod morton;
 
 use image::{ColorType, DynamicImage, GenericImage, GenericImageView, Pixel, Rgb, Rgba};
 use std::{env, path::{self, Path, PathBuf}, time::Instant, u32, u8};
 use getargs::{Arg, Options};
 use thiserror::Error;
 
-use core::rgb_helpers::{add_colors, color_diff};
+use core::rgb_helpers::{Convert, IRgb};
 use core::accum_octree::LeafOctree;
 
 enum DitherMode {
@@ -18,9 +17,9 @@ enum DitherMode {
 
 // low hanging optimizations: 
 // - in place modification of rgb color.
-fn dither_apply_error(err_color: &Rgb<i16>, color: &Rgb<u8>) -> Rgb<u8> {
-    let [err_r, err_g, err_b] = err_color.0;
-    let [src_r, src_g, src_b] = color.0.map(|c| i16::from(c));
+fn apply_error_with_dither(err_color: &IRgb<i16>, color: &IRgb<u8>) -> IRgb<u8> {
+    let [err_r, err_g, err_b] = err_color.get_inner().0;
+    let [src_r, src_g, src_b] = color.get_inner().0.map(|c| i16::from(c));
 
     let r = src_r + err_r;
     let g = src_g + err_g;
@@ -30,18 +29,18 @@ fn dither_apply_error(err_color: &Rgb<i16>, color: &Rgb<u8>) -> Rgb<u8> {
     let dest_g = g.max(0).min(u8::MAX.into()) as u8;
     let dest_b = b.max(0).min(u8::MAX.into()) as u8;
 
-    let rgb = Rgb([dest_r, dest_g, dest_b]);
+    let rgb = IRgb::from_array([dest_r, dest_g, dest_b]);
 
     rgb
 }
 
 // expensive function to account for the octree not covering all colors!
 // dithering makes new colors out of nowhere due to errors + original color = new color
-fn nearest_color_from_palette(palette: &Vec<Rgb<u8>>, rgb: &Rgb<u8>) -> usize {
+fn nearest_color_from_palette(palette: &Vec<IRgb<u8>>, rgb: &IRgb<u8>) -> usize {
     let mut smallest_diff = u32::MAX;
     let mut best_index: usize = 0;
     for (i, palette_rgb) in palette.iter().enumerate() {
-        let diff = color_diff(palette_rgb, rgb);
+        let diff = palette_rgb.color_diff(rgb);
         if diff < 10 {
             return i;
         }
@@ -54,48 +53,42 @@ fn nearest_color_from_palette(palette: &Vec<Rgb<u8>>, rgb: &Rgb<u8>) -> usize {
     best_index
 }
 
-fn diffuse_pixel_sierra_lite(error_vec: &mut Vec<Rgb<i16>>, r_error: i16, g_error: i16, b_error: i16, error_index: usize, next_row_error_index: usize) {
+fn diffuse_pixel_sierra_lite(error_vec: &mut Vec<IRgb<i16>>, rgb: &IRgb<u8>, error_index: usize, next_row_error_index: usize) {
     let next_row_error_index = next_row_error_index.max(0).min(error_vec.len() - 1);
     let front_curr_row = (error_index + 1).max(0).min(error_vec.len() - 1);
     let front_next_row = (next_row_error_index + 1).max(0).min(error_vec.len() - 1);
 
-    add_colors(&mut error_vec[front_curr_row], &Rgb::<i16>([r_error * 2 / 4, g_error * 2 / 4, b_error * 2 / 4]));
-    add_colors(&mut error_vec[front_next_row], &Rgb::<i16>([r_error / 4, g_error / 4, b_error / 4]));
-    add_colors(&mut error_vec[next_row_error_index], &Rgb::<i16>([r_error / 4, g_error / 4, b_error / 4]));
+    error_vec[front_curr_row] += rgb.clone().lower_convert() + 2 / 4;
+    error_vec[front_next_row] += rgb.clone().lower_convert() / 4;
+    error_vec[next_row_error_index] += rgb.clone().lower_convert() / 4;
 }
-fn diffuse_pixel_floyd_steinberg(error_vec: &mut Vec<Rgb<i16>>, r_error: i16, g_error: i16, b_error: i16, error_index: usize, next_row_error_index: usize) {
+fn diffuse_pixel_floyd_steinberg(error_vec: &mut Vec<IRgb<i16>>, rgb: &IRgb<u8>, error_index: usize, next_row_error_index: usize) {
     let front_curr_row = (error_index + 1).max(0).min(error_vec.len() - 1);
     let behind_next_row = (next_row_error_index - 1).max(0).min(error_vec.len() - 1);
     let next_row_error_index = next_row_error_index.max(0).min(error_vec.len() - 1);
     let front_next_row = (next_row_error_index + 1).max(0).min(error_vec.len() - 1);
 
-    add_colors(&mut error_vec[front_curr_row], &Rgb::<i16>([r_error * 7 / 16, g_error * 7 / 16, b_error * 7 / 16]));
-    add_colors(&mut error_vec[front_next_row], &Rgb::<i16>([r_error / 16, g_error / 16, b_error / 16]));
-    add_colors(&mut error_vec[next_row_error_index], &Rgb::<i16>([r_error * 5 / 16, g_error * 5 / 16, b_error * 5 / 16]));
-    add_colors(&mut error_vec[behind_next_row], &Rgb::<i16>([r_error * 3 / 16, g_error * 3 / 16, b_error * 3 / 16]));
+    error_vec[front_curr_row] += rgb.clone().lower_convert() * 7 / 16;
+    error_vec[front_next_row] += rgb.clone().lower_convert() / 16;
+    error_vec[next_row_error_index] += rgb.clone().lower_convert() * 5 / 16;
+    error_vec[behind_next_row] += rgb.clone().lower_convert() * 5 / 16;
 }
 
 // pre-allocated error_vec.
-fn diffuse_error(error_vec: &mut Vec<Rgb<i16>>, width: usize, x: usize, y: usize, src_color: &Rgb<u8>, corrected_color: &Rgb<u8>, dither_mode: &DitherMode) {
-    let [src_r, src_g, src_b] = src_color.0;
-    let [corr_r, corr_g, corr_b] = corrected_color.0;
+fn diffuse_error(error_vec: &mut Vec<IRgb<i16>>, width: usize, x: usize, y: usize, src_color: &IRgb<u8>, corrected_color: &IRgb<u8>, dither_mode: &DitherMode) {
     let error_index = (width * y) + x;
     let next_row_error_index = (width * (y + 1)) + x;
 
-    let r_error = src_r as i16 - corr_r as i16;
-    let g_error = src_g as i16 - corr_g as i16;
-    let b_error = src_b as i16 - corr_b as i16;
-
     match dither_mode {
-        DitherMode::SierraLite => diffuse_pixel_sierra_lite(error_vec, r_error, g_error, b_error, error_index, next_row_error_index),
-        DitherMode::FloydSteinberg => diffuse_pixel_floyd_steinberg(error_vec, r_error, g_error, b_error, error_index, next_row_error_index),
+        DitherMode::SierraLite => diffuse_pixel_sierra_lite(error_vec, src_color, error_index, next_row_error_index),
+        DitherMode::FloydSteinberg => diffuse_pixel_floyd_steinberg(error_vec, src_color, error_index, next_row_error_index),
         DitherMode::Base => panic!("base!!"),
     }
 
-    error_vec[error_index] = Rgb([0, 0, 0]);
+    error_vec[error_index] = IRgb::from_array([0, 0, 0]);
 }
 
-fn base_quantize(octree: &LeafOctree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut DynamicImage) {
+fn base_quantize(octree: &LeafOctree, palette: &Vec<IRgb<u8>>, source: &DynamicImage, destination: &mut DynamicImage) {
     let (width, height) = source.dimensions();
     for y in 0..height {
         for x in 0..width {
@@ -109,19 +102,19 @@ fn base_quantize(octree: &LeafOctree, palette: &Vec<Rgb<u8>>, source: &DynamicIm
     }
 }
 
-fn quantize_dither_image(octree: &LeafOctree, palette: &Vec<Rgb<u8>>, source: &DynamicImage, destination: &mut DynamicImage, dither_mode: &DitherMode) {
+fn quantize_dither_image(octree: &LeafOctree, palette: &Vec<IRgb<u8>>, source: &DynamicImage, destination: &mut DynamicImage, dither_mode: &DitherMode) {
     let image_width = source.width() as usize;
-    let mut error_vec = vec![Rgb::<i16>([0, 0, 0]); (source.width() * source.height()) as usize];
+    let mut error_vec = vec![IRgb::<i16>::new(IRgb([0, 0, 0])); (source.width() * source.height()) as usize];
 
     let (width, height) = source.dimensions();
     for y in 0..height {
         for x in 0..width {
             let rgba = source.get_pixel(x, y);
-            let rgb = rgba.to_rgb();
+            let rgb = IRgb::new(rgba.to_rgb());
             // - apply error
             let error_index = (image_width * y as usize) + x as usize;
             let dither_rgb = error_vec[error_index];
-            let corrected_rgb = dither_apply_error(&dither_rgb, &rgb);
+            let corrected_rgb = apply_error_with_dither(&dither_rgb, &rgb);
             // - get nearest color from palette
             let palette_index = match octree.get_palette_index(corrected_rgb, true) {
                 Some(index) => index,
@@ -147,7 +140,7 @@ fn add_to_filename(path: &Path, addition: &str) -> PathBuf {
 }
 
 
-fn print_palette(palette: &Vec<Rgb<u8>>) {
+fn print_palette(palette: &Vec<IRgb<u8>>) {
     print!("Palette: ");
     for rgb in palette.iter() {
         print_color_box(rgb);
@@ -156,8 +149,8 @@ fn print_palette(palette: &Vec<Rgb<u8>>) {
     println!("\x1B[0m");
 }
 
-fn print_color_box(rgb: &Rgb<u8>) {
-    let [r, g, b] = rgb.0;
+fn print_color_box(rgb: &IRgb<u8>) {
+    let [r, g, b] = rgb.get_inner().0;
     print!("\x1B[48;2;{};{};{}m ", r, g, b);
 }
 
@@ -295,7 +288,7 @@ color type: {:?}, bits per pixel: {}, channel count: {}
 
     let start = Instant::now();
     for (_, _, rgba) in img.pixels() {
-        recursive_octree.add_color(rgba.to_rgb());
+        recursive_octree.add_color(IRgb::new(rgba.to_rgb()));
     }
 
     println!("\nseconds to initialize: {:?}", Instant::now() - start);

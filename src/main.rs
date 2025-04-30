@@ -1,7 +1,7 @@
 
 pub mod core;
 
-use image::{ColorType, DynamicImage, GenericImage, GenericImageView, Pixel, Rgb, Rgba};
+use image::{ColorType, DynamicImage, GenericImage, GenericImageView, Pixel, Rgba};
 use std::{env, path::{self, Path, PathBuf}, time::Instant, u32, u8};
 use getargs::{Arg, Options};
 use thiserror::Error;
@@ -17,10 +17,11 @@ enum DitherMode {
 
 // low hanging optimizations: 
 // - in place modification of rgb color.
+// - there are too many copies in this entire codebase.
 fn apply_error_with_dither(err_color: &IRgb<i16>, color: &IRgb<u8>) -> IRgb<u8> {
     let src_color = IRgb::<i16>::safe_cast(*color).unwrap();
-    let color = src_color + *err_color;
-
+    let mut color = src_color + *err_color;
+    color.clamp(u8::MIN.into(), u8::MAX.into());
     IRgb::<u8>::safe_cast(color).unwrap()
     /*
     let dest_r = r.max(0).min(u8::MAX.into()) as u8;
@@ -67,7 +68,6 @@ fn diffuse_pixel_floyd_steinberg(error_vec: &mut Vec<IRgb<i16>>, rgb: &IRgb<u8>,
     let next_row_error_index = next_row_error_index.max(0).min(error_vec.len() - 1);
     let front_next_row = (next_row_error_index + 1).max(0).min(error_vec.len() - 1);
 
-
     error_vec[front_curr_row] += IRgb::safe_cast(*rgb).unwrap() * 7 / 16;
     error_vec[front_next_row] += IRgb::safe_cast(*rgb).unwrap() / 16;
     error_vec[next_row_error_index] += IRgb::safe_cast(*rgb).unwrap() * 5 / 16;
@@ -75,7 +75,7 @@ fn diffuse_pixel_floyd_steinberg(error_vec: &mut Vec<IRgb<i16>>, rgb: &IRgb<u8>,
 }
 
 // pre-allocated error_vec.
-fn diffuse_error(error_vec: &mut Vec<IRgb<i16>>, width: usize, x: usize, y: usize, src_color: &IRgb<u8>, corrected_color: &IRgb<u8>, dither_mode: &DitherMode) {
+fn diffuse_error(error_vec: &mut Vec<IRgb<i16>>, width: usize, x: usize, y: usize, src_color: &IRgb<u8>, dither_mode: &DitherMode) {
     let error_index = (width * y) + x;
     let next_row_error_index = (width * (y + 1)) + x;
 
@@ -123,7 +123,7 @@ fn quantize_dither_image(octree: &LeafOctree, palette: &Vec<IRgb<u8>>, source: &
             let palette_color = palette[palette_index];
             // let palette_index = nearest_color_from_palette(palette, &corrected_rgb);
             // - diffuse error
-            diffuse_error(&mut error_vec, image_width, x as usize, y as usize, &corrected_rgb, &palette_color, &dither_mode);
+            diffuse_error(&mut error_vec, image_width, x as usize, y as usize, &corrected_rgb, &dither_mode);
 
             destination.put_pixel(x as u32, y as u32, Rgba([palette_color.0[0], palette_color.0[1], palette_color.0[2], rgba.0[3]]));
         }

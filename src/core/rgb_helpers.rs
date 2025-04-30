@@ -7,13 +7,22 @@ use num_traits::{Bounded, Float, Num, NumCast, PrimInt};
 pub struct IRgb<T>(pub Rgb<T>);
 impl<T> IRgb<T>
 where 
-    T: NumCast + Bounded + Copy,
+    T: NumCast + Bounded + Copy + PartialOrd,
 {
     pub fn from_array(arr: [T; 3]) -> Self {
         IRgb(Rgb(arr))
     }
     pub fn get_inner(&self) -> Rgb<T> {
         self.0.clone()
+    }
+    pub fn clamp(&mut self, min: T, max: T) {
+        for v in self.0.0.iter_mut() {
+            if *v < min {
+                *v = min
+            } else if *v > max {
+                *v = max
+            };
+        }
     }
     pub fn color_diff<K: NumCast + Bounded + Copy>(self, rhs: IRgb<K>) -> u32 {
         let lhs: [i32; 3] = self.0.0.map(|x| <i32 as NumCast>::from(x).unwrap());
@@ -31,8 +40,6 @@ where
         Fro: NumCast + Copy + Clone,
         // To: NumCast + Bounded,
     {
-        // todo: clamp values!
-        todo!("Clamp the values first.");
         let value = value.0.0;
         let mut result = [T::min_value(), T::min_value(), T::min_value()];
         for i in 0..3 {
@@ -42,6 +49,7 @@ where
 
         Some(IRgb(Rgb(result)))
     }
+
 
     pub fn float_to_int<Fro, To>(value: IRgb<Fro>) -> Option<IRgb<To>> where 
         Fro: Float,

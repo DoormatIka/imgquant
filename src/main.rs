@@ -19,6 +19,7 @@ enum DitherMode {
 // - in place modification of rgb color.
 // - there are too many copies in this entire codebase.
 fn apply_error_with_dither(err_color: &IRgb<i16>, color: &IRgb<u8>) -> IRgb<u8> {
+    todo!("Test this as well with the original implementation.");
     let src_color = IRgb::<i16>::safe_cast(*color).unwrap();
     let mut color = src_color + *err_color;
     color.clamp(u8::MIN.into(), u8::MAX.into());
@@ -78,6 +79,7 @@ fn diffuse_pixel_floyd_steinberg(error_vec: &mut Vec<IRgb<i16>>, rgb: &IRgb<u8>,
 fn diffuse_error(error_vec: &mut Vec<IRgb<i16>>, width: usize, x: usize, y: usize, src_color: &IRgb<u8>, dither_mode: &DitherMode) {
     let error_index = (width * y) + x;
     let next_row_error_index = (width * (y + 1)) + x;
+    todo!(r#"There was a missing parameter here called "corrected_color", find out what it did in main."#);
 
     match dither_mode {
         DitherMode::SierraLite => diffuse_pixel_sierra_lite(error_vec, src_color, error_index, next_row_error_index),

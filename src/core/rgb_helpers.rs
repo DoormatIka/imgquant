@@ -1,15 +1,49 @@
 
-use std::{ops::{Add, AddAssign, Div, Mul, Sub}, process::Output, u8};
+use std::ops::{Add, AddAssign, Div, Mul, Sub};
 use image::Rgb;
-use num_traits::{Float, NumCast, PrimInt, Num, ToPrimitive};
+use num_traits::{Bounded, Float, Num, NumCast, PrimInt};
 
-#[derive(Clone, Debug)]
-pub struct IRgb<T>(Rgb<T>);
+#[derive(Copy, Clone, Debug)]
+pub struct IRgb<T>(pub Rgb<T>);
 impl<T> IRgb<T>
 where 
-    T: PrimInt + Float + Clone,
+    T: NumCast + Bounded + Copy,
 {
-    fn float_to_int<Fro, To>(value: IRgb<Fro>) -> Option<IRgb<To>> where 
+    pub fn from_array(arr: [T; 3]) -> Self {
+        IRgb(Rgb(arr))
+    }
+    pub fn get_inner(&self) -> Rgb<T> {
+        self.0.clone()
+    }
+    pub fn color_diff<K: NumCast + Bounded + Copy>(self, rhs: IRgb<K>) -> u32 {
+        let lhs: [i32; 3] = self.0.0.map(|x| <i32 as NumCast>::from(x).unwrap());
+        let rhs: [i32; 3] = rhs.0.0.map(|x| <i32 as NumCast>::from(x).unwrap());
+
+        let delta = [
+            lhs[0] - rhs[0],
+            lhs[1] - rhs[1],
+            lhs[2] - rhs[2],
+        ];
+
+        (3 * delta[0] * delta[0] + 6 * delta[1] * delta[1] + delta[2] * delta[2]) as u32
+    }
+    pub fn safe_cast<Fro>(value: IRgb<Fro>) -> Option<IRgb<T>> where 
+        Fro: NumCast + Copy + Clone,
+        // To: NumCast + Bounded,
+    {
+        // todo: clamp values!
+        todo!("Clamp the values first.");
+        let value = value.0.0;
+        let mut result = [T::min_value(), T::min_value(), T::min_value()];
+        for i in 0..3 {
+            let v = value[i];
+            result[i] = <T as NumCast>::from(v)?;
+        }
+
+        Some(IRgb(Rgb(result)))
+    }
+
+    pub fn float_to_int<Fro, To>(value: IRgb<Fro>) -> Option<IRgb<To>> where 
         Fro: Float,
         To: PrimInt + NumCast,
     {
@@ -23,7 +57,7 @@ where
         Some(clr)
     }
 
-    fn int_to_float<Fro, To>(value: IRgb<Fro>) -> Option<IRgb<To>> where 
+    pub fn int_to_float<Fro, To>(value: IRgb<Fro>) -> Option<IRgb<To>> where 
         Fro: PrimInt,
         To: Float + NumCast,
     {
@@ -37,30 +71,14 @@ where
         Some(clr)
     }
 }
-impl<T> Add for IRgb<T>
-where 
-    T: Add<T, Output = T>
-{
-    type Output = Self;
-    fn add(self, rhs: Self) -> Self::Output {
-        let [r, g, b] = self.0.0;
-        let [rhr, rhg, rhb] = rhs.0.0;
-
-        Self(Rgb([
-            r + rhr,
-            g + rhg,
-            b + rhb,
-        ]))
-    }
-}
 
 impl<T> AddAssign for IRgb<T>
 where 
     T: AddAssign
 {
     fn add_assign(&mut self, rhs: Self) {
-        let [sr, sg, sb] = &mut self.inner.0;
-        let [r, g, b] = rhs.inner.0;
+        let [sr, sg, sb] = &mut self.0.0;
+        let [r, g, b] = rhs.0.0;
         *sr += r;
         *sg += g;
         *sb += b;
@@ -72,7 +90,7 @@ where
     T: Copy + Num + AddAssign<T>,
 {
     fn add_assign(&mut self, rhs: T) {
-        let [sr, sg, sb] = &mut self.inner.0;
+        let [sr, sg, sb] = &mut self.0.0;
         *sr += rhs;
         *sg += rhs;
         *sb += rhs;
@@ -85,10 +103,10 @@ where
 {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
-        let [sr, sg, sb] = self.inner.0;
-        let [r, g, b] = rhs.inner.0;
+        let [sr, sg, sb] = self.0.0;
+        let [r, g, b] = rhs.0.0;
         IRgb {
-            inner: Rgb::<T>([sr + r, sg + g, sb + b]),
+            0: Rgb::<T>([sr + r, sg + g, sb + b]),
         }
     }
 }
@@ -100,10 +118,8 @@ where
     type Output = Self;
 
     fn add(self, rhs: T) -> Self::Output {
-        let [r, g, b] = self.inner.0;
-        IRgb {
-            inner: Rgb([r + rhs, g + rhs, b + rhs]),
-        }
+        let [r, g, b] = self.0.0;
+        IRgb(Rgb([r + rhs, g + rhs, b + rhs]))
     }
 }
 
@@ -113,11 +129,9 @@ where
 {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
-        let [sr, sg, sb] = self.inner.0;
-        let [r, g, b] = rhs.inner.0;
-        IRgb {
-            inner: Rgb::<T>([sr - r, sg - g, sb - b]),
-        }
+        let [sr, sg, sb] = self.0.0;
+        let [r, g, b] = rhs.0.0;
+        IRgb(Rgb::<T>([sr - r, sg - g, sb - b]))
     }
 }
 
@@ -128,10 +142,8 @@ where
     type Output = Self;
 
     fn sub(self, rhs: T) -> Self::Output {
-        let [r, g, b] = self.inner.0;
-        IRgb {
-            inner: Rgb([r - rhs, g - rhs, b - rhs]),
-        }
+        let [r, g, b] = self.0.0;
+        IRgb(Rgb([r - rhs, g - rhs, b - rhs]))
     }
 }
 
@@ -141,11 +153,9 @@ where
 {
     type Output = Self;
     fn mul(self, rhs: Self) -> Self::Output {
-        let [sr, sg, sb] = self.inner.0;
-        let [r, g, b] = rhs.inner.0;
-        IRgb {
-            inner: Rgb::<T>([sr * r, sg * g, sb * b]),
-        }
+        let [sr, sg, sb] = self.0.0;
+        let [r, g, b] = rhs.0.0;
+        IRgb(Rgb::<T>([sr * r, sg * g, sb * b]))
     }
 }
 
@@ -156,10 +166,8 @@ where
     type Output = Self;
 
     fn mul(self, rhs: T) -> Self::Output {
-        let [r, g, b] = self.inner.0;
-        IRgb {
-            inner: Rgb([r - rhs, g - rhs, b - rhs]),
-        }
+        let [r, g, b] = self.0.0;
+        IRgb(Rgb([r - rhs, g - rhs, b - rhs]))
     }
 }
 
@@ -169,11 +177,9 @@ where
 {
     type Output = Self;
     fn div(self, rhs: Self) -> Self::Output {
-        let [sr, sg, sb] = self.inner.0;
-        let [r, g, b] = rhs.inner.0;
-        IRgb {
-            inner: Rgb::<T>([sr / r, sg / g, sb / b]),
-        }
+        let [sr, sg, sb] = self.0.0;
+        let [r, g, b] = rhs.0.0;
+        IRgb(Rgb::<T>([sr / r, sg / g, sb / b]))
     }
 }
 
@@ -184,24 +190,9 @@ where
     type Output = Self;
 
     fn div(self, rhs: T) -> Self::Output {
-        let [r, g, b] = self.inner.0;
-        IRgb {
-            inner: Rgb([r / rhs, g / rhs, b / rhs]),
-        }
+        let [r, g, b] = self.0.0;
+        IRgb(Rgb([r / rhs, g / rhs, b / rhs]))
     }
-}
-
-pub fn color_diff<L, R>(lhs: &Rgb<L>, rhs: &Rgb<R>) -> u32 
-where 
-    L: Copy,
-    R: Copy,
-    i32: From<L> + From<R>,
-{
-    let delta_r = i32::from(lhs.0[0]) - i32::from(rhs.0[0]);
-    let delta_g = i32::from(lhs.0[1]) - i32::from(rhs.0[1]);
-    let delta_b = i32::from(lhs.0[2]) - i32::from(rhs.0[2]);
-
-    (3 * delta_r * delta_r + 6 * delta_g * delta_g + delta_b * delta_b) as u32
 }
 
 pub fn add_colors<T, U>(color: &mut Rgb<T>, other_color: &Rgb<U>) 

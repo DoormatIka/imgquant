@@ -84,7 +84,7 @@ impl LeafOctree {
                     //     i64 to u32
                     //
                     // or just have methods to convert them bleh.
-                    palette.push(Convert::<u8>::lower_convert(color).expect("Couldn't convert u32 to u8."));
+                    palette.push(IRgb::<u8>::safe_cast(color).unwrap());
                 }
                 borrowed_node.palette_index = palette_index as u32;
                 palette_index += 1;
@@ -135,7 +135,7 @@ impl OctreeNode {
     }
     pub fn add_color(&mut self, color: IRgb<u8>, level: usize, levels: &mut LevelVec, depth: usize) {
         if level >= depth {
-            self.color += color.lower_convert().unwrap();
+            self.color += IRgb::safe_cast(color).unwrap();
             self.pixel_count += 1;
             return;
         }
@@ -215,7 +215,7 @@ impl OctreeNode {
 
 impl fmt::Display for OctreeNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let [r, g, b] = self.color.0.map(|x| x as u8);
+        let [r, g, b] = self.color.0.0.map(|x| x as u8);
         let children: Vec<String> = self.children.iter()
             .filter_map(|c| c.as_ref().map(|x| format!("{}", x.borrow())))
             .collect();

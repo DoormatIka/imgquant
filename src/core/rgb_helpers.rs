@@ -3,7 +3,7 @@ use std::ops::{Add, AddAssign, Div, Mul, Sub};
 use image::Rgb;
 use num_traits::{Bounded, Float, Num, NumCast, PrimInt};
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct IRgb<T>(pub Rgb<T>);
 impl<T> IRgb<T>
 where 
@@ -38,7 +38,6 @@ where
     }
     pub fn safe_cast<Fro>(value: IRgb<Fro>) -> Option<IRgb<T>> where 
         Fro: NumCast + Copy + Clone,
-        // To: NumCast + Bounded,
     {
         let value = value.0.0;
         let mut result = [T::min_value(), T::min_value(), T::min_value()];
@@ -49,7 +48,6 @@ where
 
         Some(IRgb(Rgb(result)))
     }
-
 
     pub fn float_to_int<Fro, To>(value: IRgb<Fro>) -> Option<IRgb<To>> where 
         Fro: Float,
@@ -113,9 +111,7 @@ where
     fn add(self, rhs: Self) -> Self::Output {
         let [sr, sg, sb] = self.0.0;
         let [r, g, b] = rhs.0.0;
-        IRgb {
-            0: Rgb::<T>([sr + r, sg + g, sb + b]),
-        }
+        IRgb(Rgb::<T>([sr + r, sg + g, sb + b]))
     }
 }
 
@@ -126,8 +122,8 @@ where
     type Output = Self;
 
     fn add(self, rhs: T) -> Self::Output {
-        let [r, g, b] = self.0.0;
-        IRgb(Rgb([r + rhs, g + rhs, b + rhs]))
+        let [sr, sg, sb] = self.0.0;
+        IRgb(Rgb([sr + rhs, sg + rhs, sb + rhs]))
     }
 }
 
@@ -150,8 +146,8 @@ where
     type Output = Self;
 
     fn sub(self, rhs: T) -> Self::Output {
-        let [r, g, b] = self.0.0;
-        IRgb(Rgb([r - rhs, g - rhs, b - rhs]))
+        let [sr, sg, sb] = self.0.0;
+        IRgb(Rgb([sr - rhs, sg - rhs, sb - rhs]))
     }
 }
 
@@ -174,8 +170,8 @@ where
     type Output = Self;
 
     fn mul(self, rhs: T) -> Self::Output {
-        let [r, g, b] = self.0.0;
-        IRgb(Rgb([r - rhs, g - rhs, b - rhs]))
+        let [sr, sg, sb] = self.0.0;
+        IRgb(Rgb([sr * rhs, sg * rhs, sb * rhs]))
     }
 }
 
@@ -198,8 +194,8 @@ where
     type Output = Self;
 
     fn div(self, rhs: T) -> Self::Output {
-        let [r, g, b] = self.0.0;
-        IRgb(Rgb([r / rhs, g / rhs, b / rhs]))
+        let [sr, sg, sb] = self.0.0;
+        IRgb(Rgb([sr / rhs, sg / rhs, sb / rhs]))
     }
 }
 

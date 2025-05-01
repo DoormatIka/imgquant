@@ -76,13 +76,6 @@ impl LeafOctree {
                 let mut borrowed_node = node.borrow_mut();
                 if borrowed_node.is_leaf() {
                     let color = borrowed_node.color / borrowed_node.pixel_count;
-                    // todo: conversion! 
-                    // generalize conversion from: 
-                    //     u64 to u8
-                    //     i32 to u8
-                    //     i64 to u32
-                    //
-                    // or just have methods to convert them bleh.
                     palette.push(IRgb::<u8>::safe_cast(color).unwrap());
                 }
                 borrowed_node.palette_index = palette_index as u32;
